@@ -673,14 +673,14 @@ class FixedWeightsConstraint(tf.keras.constraints.Constraint):
     def from_config(cls, config):
         return cls(w=config["w"])
 
-def flow_model(path, fd,a=1e-4,b=1e-4,c=1e-4, s=1):
+def flow_model(path, fd,a=1e-4,b=1e-4,c=1e-4, s=1, seed=1):
     """
     Builds and compiles a TensorFlow Keras model based on data from an Excel file and additional parameters.
 
     Parameters:
     - path (str): Path to the Excel file containing the model's data.
     - fd (array-like): Additional flow data for the model.
-    - seeds (int): Seed for random number generation for reproducibility.
+    - seed (int): Seed for Python, NumPy and TensorFlow, and for the weight initializer.
     - s (int): Mode switch for the model configuration.
 
     Returns:
@@ -695,7 +695,8 @@ def flow_model(path, fd,a=1e-4,b=1e-4,c=1e-4, s=1):
     Data_sto = pd.read_excel(path, sheet_name='sto')
     w = gen_w(Data_inf, Data_W, Data_T, Data_C, Data_Dc, Data_sto)
     N = w.shape[0]
-    initializer = tf.keras.initializers.GlorotNormal()
+    tf.keras.utils.set_random_seed(seed)  # seeds Python, NumPy and TensorFlow
+    initializer = tf.keras.initializers.GlorotNormal(seed=seed)
     In = Input(shape=(N,))
     N1 = N
     x=Dense(w.shape[1]*4,'selu',kernel_regularizer=regularizers.L1L2(a,a))(In)
