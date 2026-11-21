@@ -17,6 +17,16 @@ setup(
     maintainer_email="dieaperezros@unal.edu.co",
     download_url='',
     install_requires=[
+        "tensorflow==2.15.0",
+        "cvxpy[CLARABEL,CBC,CVXOPT,GLOP,GLPK,GUROBI,MOSEK,PDLP,SCIP,XPRESS]",
+        "numpy",
+        "pandas",
+        "scipy",
+        "scikit-learn",
+        "matplotlib",
+        "seaborn",
+        "openpyxl",
+        "ipython",
     ],
     scripts=[
     ],
@@ -26,7 +36,7 @@ setup(
     zip_safe=False,
     long_description=README,
     long_description_content_type='text/markdown',
-    python_requires='>=3.7',
+    python_requires='>=3.9,<3.12',
 
     #https://pypi.org/classifiers/
     classifiers=[

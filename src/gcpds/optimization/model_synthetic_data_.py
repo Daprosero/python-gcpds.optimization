@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import warnings
 from typing import Any, Callable, List, Tuple, Optional
 
@@ -24,16 +25,12 @@ def install_libraries(libraries):
     for library in libraries:
         subprocess.check_call([sys.executable, "-m", "pip", "install", library])
 
-# Llamar a la función para instalar las librerías
-install_libraries(libraries)
+# Dependencies (including tensorflow==2.15.0) are declared in setup.py; nothing is installed at import time.
 
-# Desinstalar versiones existentes de TensorFlow y tf-keras
-subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", "tensorflow", "tf-keras"])
-
-# Instalar TensorFlow 2.16.1
-subprocess.check_call([sys.executable, "-m", "pip", "install", "tensorflow==2.15.0"])
-
-from google.colab import drive
+try:
+    from google.colab import drive  # only available on Colab
+except ImportError:
+    drive = None
 from keras import Model, backend as k, layers, regularizers
 from keras.layers import (
     Activation, Concatenate, Conv1D, Conv2D, Dense, Dropout, Flatten, Input,
@@ -58,14 +55,14 @@ mse = mean_squared_error
 mae = mean_absolute_error
 mape = mean_absolute_percentage_error
 def sintplot_tim():
-    FtestM=np.load('/content/drive/Shareddrives/red_gas_col/Data/Sintéticos/FlytestM.npy')
-    Ftest=np.load('/content/drive/Shareddrives/red_gas_col/Data/Sintéticos/Flytest.npy').sum(axis=-1)
-    FtrainM=np.load('/content/drive/Shareddrives/red_gas_col/Data/Sintéticos/FlytrainM.npy')
-    Ftrain=np.load('/content/drive/Shareddrives/red_gas_col/Data/Sintéticos/Flytrain.npy').sum(axis=-1)
-    testM=np.load('/content/drive/Shareddrives/red_gas_col/Data/Sintéticos/TestM.npy')
-    test=np.load('/content/drive/Shareddrives/red_gas_col/Data/Sintéticos/Test.npy')
-    trainM=np.load('/content/drive/Shareddrives/red_gas_col/Data/Sintéticos/TrainM.npy')
-    train=np.load('/content/drive/Shareddrives/red_gas_col/Data/Sintéticos/Train.npy')
+    FtestM=np.load(f'{DATA_DIR}/Sintéticos/FlytestM.npy')
+    Ftest=np.load(f'{DATA_DIR}/Sintéticos/Flytest.npy').sum(axis=-1)
+    FtrainM=np.load(f'{DATA_DIR}/Sintéticos/FlytrainM.npy')
+    Ftrain=np.load(f'{DATA_DIR}/Sintéticos/Flytrain.npy').sum(axis=-1)
+    testM=np.load(f'{DATA_DIR}/Sintéticos/TestM.npy')
+    test=np.load(f'{DATA_DIR}/Sintéticos/Test.npy')
+    trainM=np.load(f'{DATA_DIR}/Sintéticos/TrainM.npy')
+    train=np.load(f'{DATA_DIR}/Sintéticos/Train.npy')
 
     a=pd.DataFrame()
     b=pd.DataFrame()
@@ -110,18 +107,31 @@ def sintplot_tim():
     fig.text(0.5, -0.1, '', ha='center', va='center',fontsize=20)  # Etiqueta común para el eje x centrada
     fig.text(0.05, 0.5, 'Time[s]', ha='center', va='center', rotation='vertical',fontsize=20)  # Etiqueta común para el eje y centrada y rotada
 
-    plt.savefig('/content/Time2.pdf',bbox_inches='tight')
+    plt.savefig(f'{OUTPUT_DIR}/Time2.pdf',bbox_inches='tight')
     plt.show()
 # Suppress warnings
 warnings.filterwarnings("ignore")
+
+# Data and output locations, resolved the same way locally, on Colab and on Kaggle.
+# RPINN_DATA_DIR overrides the data folder; by default it is RPINN/Data in a clone
+# of this repository. RPINN_OUTPUT_DIR is where figures are written (default: cwd).
+def _default_data_dir() -> Path:
+    env = os.environ.get("RPINN_DATA_DIR")
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parents[3] / "RPINN" / "Data"
+
+
+DATA_DIR = _default_data_dir()
+OUTPUT_DIR = Path(os.environ.get("RPINN_OUTPUT_DIR", "."))
 def Weight():
     # Suponiendo que array1 y array2 son tus arrays originales
-    U=np.load('/content/drive/Shareddrives/red_gas_col/Data/Sintéticos/U.npy')
+    U=np.load(f'{DATA_DIR}/Sintéticos/U.npy')
 
-    Y=np.load('/content/drive/Shareddrives/red_gas_col/Data/Sintéticos/Y.npy')
-    array1 = np.load('/content/drive/Shareddrives/red_gas_col/Data/Sintéticos/PI_EM.npy')
-    array2 = np.load('/content/drive/Shareddrives/red_gas_col/Data/Sintéticos/PI_ES.npy')
-    array3 = np.load('/content/drive/Shareddrives/red_gas_col/Data/Sintéticos/PI_T.npy')
+    Y=np.load(f'{DATA_DIR}/Sintéticos/Y.npy')
+    array1 = np.load(f'{DATA_DIR}/Sintéticos/PI_EM.npy')
+    array2 = np.load(f'{DATA_DIR}/Sintéticos/PI_ES.npy')
+    array3 = np.load(f'{DATA_DIR}/Sintéticos/PI_T.npy')
 
     # Convertir arrays en DataFrames
     df1 = pd.DataFrame(array1,columns=['NN(x1)','NN(x2)','NN(x3)','NN(x4)','NN(x5)'])
@@ -144,7 +154,7 @@ def Weight():
     gs = GridSpec(nrows=3, ncols=2)
     import math
     # Cargando el DataFrame desde un archivo Excel
-    df = pd.read_excel('/content/drive/Shareddrives/red_gas_col/Data/Sintéticos/Modely.xlsx')
+    df = pd.read_excel(f'{DATA_DIR}/Sintéticos/Modely.xlsx')
 
     # Calculando el valor mínimo para cada columna
     minimos = df.min()
@@ -234,7 +244,7 @@ def Weight():
     #plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
     # Ajusta automáticamente los subplots para que el layout sea claro
-    plt.savefig('/content/W.pdf',bbox_inches='tight')
+    plt.savefig(f'{OUTPUT_DIR}/W.pdf',bbox_inches='tight')
     plt.show()
 
 def add_noise(data: np.ndarray, snr: float, mu: float = 0.0) -> np.ndarray:
@@ -651,7 +661,7 @@ class Evaluate:
         # Display the plots
         fig.text(0.5, -0.1, '', ha='center', va='center',fontsize=20)  # Etiqueta común para el eje x centrada
         fig.text(0.01, 0.5, 'MAPE', ha='center', va='center', rotation='vertical',fontsize=20)  # Etiqueta común para el eje y centrada y rotada
-        plt.savefig('/content/Toy.pdf',bbox_inches='tight')
+        plt.savefig(f'{OUTPUT_DIR}/Toy.pdf',bbox_inches='tight')
         plt.show()
         
 
@@ -991,7 +1001,7 @@ class FlyEvaluate:
         # Display the plots
         fig.text(0.5, -0.1, 'Solver', ha='center', va='center',fontsize=20)  # Etiqueta común para el eje x centrada
         fig.text(0.05, 0.5, 'MAPE', ha='center', va='center', rotation='vertical',fontsize=20)  # Etiqueta común para el eje y centrada y rotada
-        plt.savefig('/content/ReFly.pdf',bbox_inches='tight')
+        plt.savefig(f'{OUTPUT_DIR}/ReFly.pdf',bbox_inches='tight')
         plt.show()
 
     def history_plot_loss(self, path= '') -> pd.DataFrame:

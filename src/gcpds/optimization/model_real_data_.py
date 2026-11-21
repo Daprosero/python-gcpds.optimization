@@ -1,6 +1,9 @@
 from scipy.sparse import coo_matrix, eye, hstack
 from tensorflow.keras.callbacks import Callback
-from google.colab import drive
+try:
+    from google.colab import drive  # only available on Colab
+except ImportError:
+    drive = None
 from tensorflow.python.ops.gen_math_ops import imag_eager_fallback
 from tensorflow.python.ops.nn_ops import softmax
 from keras import backend as k
@@ -39,6 +42,19 @@ mse = mean_squared_error
 mae = mean_absolute_error
 mape = mean_absolute_percentage_error
 warnings.filterwarnings("ignore")
+
+# Data and output locations, resolved the same way locally, on Colab and on Kaggle.
+# RPINN_DATA_DIR overrides the data folder; by default it is RPINN/Data in a clone
+# of this repository. RPINN_OUTPUT_DIR is where figures are written (default: cwd).
+def _default_data_dir() -> Path:
+    env = os.environ.get("RPINN_DATA_DIR")
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parents[3] / "RPINN" / "Data"
+
+
+DATA_DIR = _default_data_dir()
+OUTPUT_DIR = Path(os.environ.get("RPINN_OUTPUT_DIR", "."))
 # Definir las librerías que necesitas instalar
 libraries = [
     "cvxpy[CLARABEL,CBC,CVXOPT,GLOP,GLPK,GUROBI,MOSEK,PDLP,SCIP,XPRESS]"
@@ -49,14 +65,7 @@ def install_libraries(libraries):
     for library in libraries:
         subprocess.check_call([sys.executable, "-m", "pip", "install", library])
 
-# Llamar a la función para instalar las librerías
-install_libraries(libraries)
-
-# Desinstalar versiones existentes de TensorFlow y tf-keras
-subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", "tensorflow", "tf-keras"])
-
-# Instalar TensorFlow 2.16.1
-subprocess.check_call([sys.executable, "-m", "pip", "install", "tensorflow==2.15.0"])
+# Dependencies (including tensorflow==2.15.0) are declared in setup.py; nothing is installed at import time.
 
 def plot_time_p():
     a=plot_time(s=1,tip='M',plotb=False)
@@ -86,7 +95,7 @@ def plot_time_p():
     fig.text(0.5, -0.1, '', ha='center', va='center',fontsize=20)  # Etiqueta común para el eje x centrada
     fig.text(0.05, 0.5, 'Time[s]', ha='center', va='center', rotation='vertical',fontsize=20)  # Etiqueta común para el eje y centrada y rotada
 
-    plt.savefig('/content/Time.pdf',bbox_inches='tight')
+    plt.savefig(f'{OUTPUT_DIR}/Time.pdf',bbox_inches='tight')
     plt.show()
 def RGAS():
     Balance1,Weymouth1,PjPi1,Costos1=ng_case_evaluate(s=1,tip1='S',tip2='MAPE',plotb=False)
@@ -826,7 +835,7 @@ def plots(Balance, Wey, re, Costos, s,name='RGAS',selec='All'):
         # Ajuste de la disposición de la gráfica y establecimiento del título principal basado en la variable 's'
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         
-        plt.savefig('/content/'+name+'.pdf',bbox_inches='tight')
+        plt.savefig(f'{OUTPUT_DIR}/'+name+'.pdf',bbox_inches='tight')
         plt.show()
     else:
         fig, axs = plt.subplots(1, 2, figsize=(20,10))
@@ -857,7 +866,7 @@ def plots(Balance, Wey, re, Costos, s,name='RGAS',selec='All'):
         axs[1].grid(True)
         # Ajuste de la disposición de la gráfica y establecimiento del título principal basado en la variable 's'
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        plt.savefig('/content/'+name+'_1'+'.pdf',bbox_inches='tight')
+        plt.savefig(f'{OUTPUT_DIR}/'+name+'_1'+'.pdf',bbox_inches='tight')
         plt.show()
 
 
@@ -1016,7 +1025,7 @@ def extract_data(times, b):
     # Using a list comprehension for concise extraction
     return [times[b, :][i][0][0] for i in range(320)]
 
-def plot_time(b='fit', s1='/content/drive/Shareddrives/red_gas_col/Data/Redes/', s2='/content/drive/Shareddrives/red_gas_col/Data/', s=1,tip='M',plotb=True):
+def plot_time(b='fit', s1=f'{DATA_DIR}/Redes/', s2=f'{DATA_DIR}/', s=1,tip='M',plotb=True):
     """
     Generates and displays boxplot visualizations for time measurements of different network models.
 
@@ -1086,7 +1095,7 @@ def plot_time(b='fit', s1='/content/drive/Shareddrives/red_gas_col/Data/Redes/',
             plt.xticks(fontsize=20, rotation=45)
             # Ajusta aquí el tamaño para los tick labels del eje Y
             plt.yticks(fontsize=20)
-            plt.savefig('/content/TimePredict.pdf',bbox_inches='tight')
+            plt.savefig(f'{OUTPUT_DIR}/TimePredict.pdf',bbox_inches='tight')
             plt.show()
             return Times_p
         else:
@@ -1116,12 +1125,12 @@ def plot_time(b='fit', s1='/content/drive/Shareddrives/red_gas_col/Data/Redes/',
             plt.xticks(fontsize=20, rotation=45)
             # Ajusta aquí el tamaño para los tick labels del eje Y
             plt.yticks(fontsize=20)
-            plt.savefig('/content/TimeTrain.pdf',bbox_inches='tight')
+            plt.savefig(f'{OUTPUT_DIR}/TimeTrain.pdf',bbox_inches='tight')
             plt.show()
             return im
         else:
             return im
-def ng_case_evaluate(s1='/content/drive/Shareddrives/red_gas_col/Data/',tip1='M',tip2='MAPE', s=1,plotb=True,selec='All'):
+def ng_case_evaluate(s1=f'{DATA_DIR}/',tip1='M',tip2='MAPE', s=1,plotb=True,selec='All'):
     """
     Evaluates multiple gas network cases using pre-trained models and generates evaluation metrics.
 
@@ -1282,7 +1291,7 @@ def evaluate_weymouth_two(X, Y,s='MAPE'):
     else:
         return [mae(X[i], Y[i]) for i in range(len(X))]
 
-def ng_evaluate_atip(s1='/content/drive/Shareddrives/red_gas_col/Data/',tip1='M',tip2='MAPE', s=1,selec='All'):
+def ng_evaluate_atip(s1=f'{DATA_DIR}/',tip1='M',tip2='MAPE', s=1,selec='All'):
     """
     Evaluate different neural network models on various gas network cases and plot their performance metrics.
 
@@ -1445,7 +1454,7 @@ def ng_evaluate_atip(s1='/content/drive/Shareddrives/red_gas_col/Data/',tip1='M'
         # Ajuste de la disposición de la gráfica y establecimiento del título principal basado en la variable 's'
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         
-        plt.savefig('/content/RGASATIP.pdf',bbox_inches='tight')
+        plt.savefig(f'{OUTPUT_DIR}/RGASATIP.pdf',bbox_inches='tight')
         plt.show()
         return(Balance, Weymouth, PjPi, Costos)
     else:
@@ -1499,7 +1508,7 @@ def ng_evaluate_atip(s1='/content/drive/Shareddrives/red_gas_col/Data/',tip1='M'
         # Ajuste de la disposición de la gráfica y establecimiento del título principal basado en la variable 's'
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         
-        plt.savefig('/content/RGASATIP_1.pdf',bbox_inches='tight')
+        plt.savefig(f'{OUTPUT_DIR}/RGASATIP_1.pdf',bbox_inches='tight')
         plt.show()
         return(Balance, Weymouth, PjPi, Costos)
 
@@ -1569,9 +1578,9 @@ def visualize_atipic(dataframes1, dataframes2, columns):
     
     plt.tight_layout()
     
-    plt.savefig('/content/Atipicos.pdf',bbox_inches='tight')
+    plt.savefig(f'{OUTPUT_DIR}/Atipicos.pdf',bbox_inches='tight')
     plt.show()
-def visualize_non_convergence(data_path='/content/drive/Shareddrives/red_gas_col/Data/', network_range=(0, 9), tips=['D']):
+def visualize_non_convergence(data_path=f'{DATA_DIR}/', network_range=(0, 9), tips=['D']):
     """
     Visualizes the percentage of non-convergence cases for different network dimensions.
 
@@ -1627,10 +1636,10 @@ def visualize_non_convergence(data_path='/content/drive/Shareddrives/red_gas_col
     # Mostrar el gráfico
     plt.tight_layout()
     
-    plt.savefig('/content/Convergencia.pdf',bbox_inches='tight')
+    plt.savefig(f'{OUTPUT_DIR}/Convergencia.pdf',bbox_inches='tight')
     plt.show()
     # Ejemplo de uso
-def dynamic_val(s=1,tip='M',s1='/content/drive/Shareddrives/red_gas_col/Data/Redes/', s2='/content/drive/Shareddrives/red_gas_col/Data/'):
+def dynamic_val(s=1,tip='M',s1=f'{DATA_DIR}/Redes/', s2=f'{DATA_DIR}/'):
     """
     Generates sinusoidal behavior and adjusts random data accordingly.
 
@@ -1717,11 +1726,11 @@ def dynamic_val(s=1,tip='M',s1='/content/drive/Shareddrives/red_gas_col/Data/Red
     axs[1].set_ylabel("Flows", fontsize=20)    # Adds label on y-axis
     axs[1].legend()           # Displays legend on the plot
     
-    plt.savefig('/content/ACTR.pdf',bbox_inches='tight')
+    plt.savefig(f'{OUTPUT_DIR}/ACTR.pdf',bbox_inches='tight')
     plt.show()
     plt.show()
 
-def loss_val(path='/content/drive/Shareddrives/red_gas_col/Prueba/Data/'):
+def loss_val(path=f'{DATA_DIR}/Registro/'):
     """
     Visualizes and compares differences in performance metrics of various models using box plots.
 
@@ -1787,10 +1796,10 @@ def loss_val(path='/content/drive/Shareddrives/red_gas_col/Prueba/Data/'):
     axs[0].set_ylim([0,1e6])
     axs[1].set_ylim([0,1e6])
     axs[2].set_ylim([0,1e9])
-    plt.savefig('/content/LOSSM.pdf',bbox_inches='tight')
+    plt.savefig(f'{OUTPUT_DIR}/LOSSM.pdf',bbox_inches='tight')
     plt.show()
 
-def bounded(s1='/content/drive/Shareddrives/red_gas_col/Data/',tip='D',s=1,im=8):
+def bounded(s1=f'{DATA_DIR}/',tip='D',s=1,im=8):
     """
      Generates box plots to visualize and compare performance metric differences across various models.
 
@@ -1804,9 +1813,9 @@ def bounded(s1='/content/drive/Shareddrives/red_gas_col/Data/',tip='D',s=1,im=8)
      Parameters
      ----------
      s1 : str, optional
-         Path to the directory containing input data files. Default is '/content/drive/Shareddrives/red_gas_col/'.
+         Path to the directory containing input data files. Default is f'{DATA_DIR}/'.
      s2 : str, optional
-         Path to the directory containing model data files. Default is '/content/drive/Shareddrives/red_gas_col/Prueba/Data/'.
+         Path to the directory containing model data files. Default is f'{DATA_DIR}/Registro/'.
      s : int, optional
          Determines the type of model. If 0, uses one set of models, if 1, uses another set. Default is 1.
 
@@ -1934,6 +1943,6 @@ def bounded(s1='/content/drive/Shareddrives/red_gas_col/Data/',tip='D',s=1,im=8)
     axs[1, 0].grid(True)
     axs[0, 1].grid(True)
     axs[0, 0].grid(True)
-    plt.savefig('/content/LIM.pdf',bbox_inches='tight')
+    plt.savefig(f'{OUTPUT_DIR}/LIM.pdf',bbox_inches='tight')
     plt.show()
     return Pe
