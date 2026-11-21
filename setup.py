@@ -10,7 +10,7 @@ setup(
     name="gcpds-optimization",
     version='0.1',
     package_dir={"": "src"},
-    packages=find_namespace_packages(where="src", include=["gcpds*"]),
+    packages=find_namespace_packages(where="src", include=["gcpds*", "RPINN*"]),
     author="Diego Armando Perez Rosero",
     author_email="dieaperezros@unal.edu.co",
     maintainer="Diego Armando Perez Rosero",

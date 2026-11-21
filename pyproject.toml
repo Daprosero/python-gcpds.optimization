@@ -1,0 +1,5 @@
+# Packaging stays in setup.py (distribution "gcpds-optimization"); this file only
+# anchors pytest to the src/ layout.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
