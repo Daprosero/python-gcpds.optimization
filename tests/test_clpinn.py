@@ -1,4 +1,4 @@
-"""Invariants of the v2 gas model: every flow bounded and every node balanced by construction."""
+"""Invariants of the CL-PINN gas model: every flow bounded and every node balanced by construction."""
 import numpy as np
 import pandas as pd
 import pytest
@@ -7,16 +7,16 @@ import scipy.io as sio
 tf = pytest.importorskip("tensorflow")
 
 from gcpds.optimization import model_real_data_ as v1  # noqa: E402
-from gcpds.optimization import model_real_data_v2 as v2  # noqa: E402
+from gcpds.optimization import clpinn as v2  # noqa: E402
 from keras import Model  # noqa: E402
 
-REDES = v1.DATA_DIR / "Redes"
+REDES = v2.DATA_DIR / "Redes"
 NETS = {"8": (REDES / "ng_case8.xlsx", 0), "18": (REDES / "ng_caseCol_18.xlsx", 8)}
 
 
 def _real_demand(net, scenario="M"):
     path, k = NETS[net]
-    z = sio.loadmat(v1.DATA_DIR / scenario / "MAPE" / "inputs_P.mat")["inputs"][0][k]
+    z = sio.loadmat(v2.DATA_DIR / scenario / "MAPE" / "inputs_P.mat")["inputs"][0][k]
     return str(path), np.asarray(z, dtype="float32")
 
 
@@ -77,7 +77,7 @@ def test_gradient_reaches_the_raw_outputs():
 
 def _ipopt(net, scenario="M"):
     path, k = NETS[net]
-    load = lambda name: np.asarray(sio.loadmat(v1.DATA_DIR / scenario / "MAPE" / name)["inputs"][0][k], float)
+    load = lambda name: np.asarray(sio.loadmat(v2.DATA_DIR / scenario / "MAPE" / name)["inputs"][0][k], float)
     return str(path), load("inputs_P.mat"), load("Flujos_P.mat")
 
 

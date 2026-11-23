@@ -1,7 +1,7 @@
-"""RPINN v2 for the gas network: every hard constraint holds by construction.
+"""CL-PINN (Closure-Layer PINN) for the gas network: every hard constraint holds by construction.
 
-This module forks the v1 gas model in ``model_real_data_`` without modifying
-it. The network makes the economic decision (raw outputs, trained); three
+This module extends the RPINN gas model in ``model_real_data_`` without
+modifying it. The network makes the economic decision (raw outputs, trained); three
 closures embedded as layers turn it into a physically exact state:
 
 1. ``BalancedFlows`` (proposal Ec. 3-4): the decision arcs -- sources,
@@ -33,6 +33,9 @@ Scope: the network must be connected with at least one source whose minimum
 injection is zero, each zone fed by at most one compressor and compressors
 forming no loops.
 """
+import os
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -44,6 +47,16 @@ from scipy.sparse.csgraph import connected_components
 from tensorflow.keras import regularizers
 
 from gcpds.optimization.model_real_data_ import FixedWeightsConstraint, gen_w
+
+def _default_data_dir() -> Path:
+    env = os.environ.get("CLPINN_DATA_DIR")
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parents[3] / "CLPINN" / "Data"
+
+
+#: Networks (``Redes``) and, per scenario ``S``/``M``/``D``, the inputs and the IPOPT reference (``MAPE/*_P.mat``).
+DATA_DIR = _default_data_dir()
 
 #: Demand classes in the column order of the ``node.demcost`` sheet.
 DEMAND_CLASSES = ("Res", "Ind", "Com", "NGV", "Ref", "Pet")
