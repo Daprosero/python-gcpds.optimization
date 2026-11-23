@@ -8,6 +8,7 @@ tf = pytest.importorskip("tensorflow")
 
 from gcpds.optimization import model_real_data_ as v1  # noqa: E402
 from gcpds.optimization import model_real_data_v2 as v2  # noqa: E402
+from keras import Model  # noqa: E402
 
 REDES = v1.DATA_DIR / "Redes"
 NETS = {"8": (REDES / "ng_case8.xlsx", 0), "18": (REDES / "ng_caseCol_18.xlsx", 8)}
@@ -37,15 +38,6 @@ def test_real_samples_are_bounded_and_balanced(net, sd):
     assert (f >= lo - 1e-4).all() and (f <= hi + 1e-4).all()
     b = np.hstack([-z.sum(1, keepdims=True), z])
     assert np.abs(f @ A.T - b).max() / scale < 1e-4
-
-
-def test_rationing_happens_when_pipes_bind_even_if_supply_suffices():
-    path, z = _real_demand("18")
-    cap = pd.read_excel(path, sheet_name="well")["Imax"].sum()
-    enough = z.sum(1) <= cap
-    f, A, lo, hi = _flows(path, z[enough], 0.5)
-    n_static = int((~np.isnan(v2.augmented_network(v2.read_network(path), ("Res",))[2])).sum())
-    assert (f[:, n_static:].sum(1) > 1e-3).any()  # the layer can ration to respect pipe capacity
 
 
 def test_several_sources_share_the_supply():
@@ -102,22 +94,31 @@ def test_pipe_flows_reproduce_ipopt_given_its_injections(net):
     assert np.abs(f - F[:, nw:nw + npi]).max() < 1e-3
 
 
-def _predict(net, n=256):
-    path, z = _real_demand(net)
+def _predict(net, n=256, scenario="M", gain=1.0):
+    path, z = _real_demand(net, scenario)
     z = z[:n]
     model = v2.flow_model_v2(path)
-    return path, z, model, model.predict(z, verbose=False)
+    if gain != 1.0:  # saturate every raw output the closures receive
+        for name in ("raw_sources", "raw_comps", "raw_levels"):
+            layer = model.get_layer(name)
+            layer.set_weights([gain * v for v in layer.get_weights()])
+        bn = model.get_layer("raw_unsupplied")
+        gamma, beta, *stats = bn.get_weights()
+        bn.set_weights([gain * gamma, gain * beta, *stats])
+    return path, z, model, model.predict(z, verbose=False, batch_size=512)
 
 
-@pytest.mark.parametrize("net", ["8", "18"])
-def test_model_state_is_physically_exact(net):
-    path, z, model, out = _predict(net)
+def _assert_physically_exact(path, z, F, P):
     sh = v2.read_network(path)
-    F, P = out["F"].astype("float64"), out["P"].astype("float64")
+    F, P = F.astype("float64"), P.astype("float64")
     scale = z.sum(1).max()
     assert v2.node_balance_residual(path, F, z).max() / scale < 1e-4
-    nw, npi = len(sh["well"]), len(sh["pipe"])
-    f = F[:, nw:nw + npi]
+    nw, npi, nc, N = len(sh["well"]), len(sh["pipe"]), len(sh["comp"]), len(sh["inf"])
+    s, f, c, u = F[:, :nw], F[:, nw:nw + npi], F[:, nw + npi:nw + npi + nc], F[:, nw + npi + nc:][:, :N]
+    assert (s >= sh["well"]["Imin"].values - 1e-3).all() and (s <= sh["well"]["Imax"].values + 1e-3).all()
+    assert (c >= -1e-3).all() and (c <= sh["comp"]["fmaxc"].values + 1e-3).all()
+    assert (u >= -1e-3).all() and (u <= z + 1e-3).all()
+    assert (f >= sh["pipe"]["Fg_min"].values - 1e-3).all() and (f <= sh["pipe"]["Fg_max"].values + 1e-3).all()
     i, j = sh["pipe"]["fnode"].values - 1, sh["pipe"]["tnode"].values - 1
     wey = (P[:, i] ** 2 - P[:, j] ** 2) - f * np.abs(f) / sh["pipe"]["Kij"].values
     assert np.abs(wey).max() / sh["inf"]["Pmax"].max() ** 2 < 1e-5
@@ -125,7 +126,21 @@ def test_model_state_is_physically_exact(net):
     ci, cj = sh["comp"]["fnode"].values - 1, sh["comp"]["tnode"].values - 1
     ratio = P[:, cj] / P[:, ci]
     assert (ratio >= 1 - 1e-5).all() and (ratio <= sh["comp"]["ratio"].values + 1e-5).all()
-    assert (f >= sh["pipe"]["Fg_min"].values - 1e-3).all() and (f <= sh["pipe"]["Fg_max"].values + 1e-3).all()
+
+
+@pytest.mark.parametrize("gain", [1.0, 30.0, 100.0])
+@pytest.mark.parametrize("scenario", ["S", "M", "D"])
+@pytest.mark.parametrize("net", ["8", "18"])
+def test_model_state_is_physically_exact(net, scenario, gain):
+    path, z, _, out = _predict(net, n=None, scenario=scenario, gain=gain)
+    _assert_physically_exact(path, z, out["F"], out["P"])
+
+
+def test_capacity_scale_rations_when_pipes_bind():
+    path, z, model, _ = _predict("18", n=None)
+    theta = Model(model.input, model.get_layer("capacity").output[2]).predict(z, verbose=False, batch_size=512)
+    assert ((theta >= 0.0) & (theta <= 1.0)).all()
+    assert (theta < 1.0 - 1e-6).any()  # network 18: pipes bind before supply runs out
 
 
 @pytest.mark.parametrize("net", ["8", "18"])
@@ -165,6 +180,19 @@ def test_two_classes_fill_their_own_user_blocks():
     assert (users[:, :8] <= x[:, :8] + 1e-4).all() and (users[:, 8:16] <= x[:, 8:] + 1e-4).all()
     assert np.abs(users[:, 16:]).max() == 0.0
     assert v2.node_balance_residual(path, F, x, ("Res", "Ind")).max() / x.sum(1).max() < 1e-4
+
+
+def test_positive_source_minimum_is_refused(tmp_path):
+    sheets = v2.read_network(str(NETS["8"][0]))
+    out = tmp_path / "net.xlsx"
+    with pd.ExcelWriter(out) as xl:
+        for key, name in v2._SHEETS.items():
+            df = sheets[key].copy()
+            if key == "well":
+                df["Imin"] = 5.0
+            df.to_excel(xl, sheet_name=name, index=False)
+    with pytest.raises(ValueError, match="Imin"):
+        v2.flow_model_v2(str(out))
 
 
 @pytest.mark.parametrize("classes", [(), ("Res", "Res"), ("Gas",)])

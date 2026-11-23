@@ -4,15 +4,22 @@ This module forks the v1 gas model in ``model_real_data_`` without modifying
 it. The network makes the economic decision (raw outputs, trained); three
 closures embedded as layers turn it into a physically exact state:
 
-1. ``BalancedFlows`` (proposal Ec. 3-4): every arc -- sources, pipes,
-   compressors and unsupplied gas per node and demand class -- is a scaled
-   sigmoid shifted by a per-node dual ``nu`` (the virtual supply node is the
-   reference, ``nu = 0``). ``nu`` minimises a strictly convex function whose
-   stationarity is the node balance ``B x = z``, found by damped
-   (Levenberg-Marquardt) Newton.
-2. ``PipeFlows`` (Ec. 5-6): given the non-pipe flows, the pipe flows are the
-   unique minimiser of ``sum |f|^3 / (3K)`` under the balance, so the Weymouth
-   equation holds on every pipe, loops included. One unknown per loop.
+1. ``BalancedFlows`` (proposal Ec. 3-4): the decision arcs -- sources,
+   compressors and unsupplied gas per node and demand class -- are scaled
+   sigmoids shifted by one dual ``nu`` per zone (the virtual supply node is
+   the reference, ``nu = 0``). ``nu`` minimises a strictly convex function
+   whose stationarity is the balance of every zone, found by damped
+   (Levenberg-Marquardt) Newton. Pipes stay inside a zone, so they cancel
+   from the zone balance and are not part of this solve.
+2. ``PipeFlows`` (Ec. 5-6): what each node still needs is delivered by the
+   pipes. Any balanced split ``f0`` plus a rotation ``C t`` around each loop
+   keeps the balance; ``t`` minimises ``sum |f|^3 / (3K)``, so the Weymouth
+   drops around every loop add up to zero. A tree has no ``t``.
+   ``CapacityScale`` then multiplies all served gas by one factor
+   ``theta <= 1`` when a pipe limit or the pressure limits cannot hold; the
+   problem is homogeneous (flows scale by ``theta``, drops by ``theta^2``),
+   so balance and Weymouth stay exact and the gas not served becomes
+   unsupplied.
 3. ``ZonePressures`` (Ec. 7-8): squared pressures follow from the Weymouth
    drops up to one level per compressor-separated zone; each level is a
    scaled sigmoid inside an interval that respects pressure limits,
@@ -22,10 +29,9 @@ Each iterative solve runs without gradient and ends with one differentiable
 Newton step that carries the implicit-function gradient. The training loss is
 the normalised operating cost ``c^T F / (max(c) * sum z)`` alone.
 
-Scope: the network must be connected with at least one source, each zone fed
-by at most one compressor and compressors forming no loops. Pipe limits are
-guaranteed by construction outside loops; inside a loop the physical flow can
-differ from the closure's and its limits become a measured property.
+Scope: the network must be connected with at least one source whose minimum
+injection is zero, each zone fed by at most one compressor and compressors
+forming no loops.
 """
 import numpy as np
 import pandas as pd
@@ -74,18 +80,24 @@ def augmented_network(sheets, classes):
 
 
 class BalancedFlows(tf.keras.layers.Layer):
-    """Arc flows inside their bounds that satisfy every node balance exactly.
+    """Arc flows inside their bounds that close every balance exactly.
 
     Inputs are ``(raw, z)``: one raw value per arc and the demand per node
-    and class. The solve runs in float64; the output is float32.
+    and class. ``groups`` (k x N, optional) sums node balances into group
+    balances -- one row per zone -- and gives one ``nu`` per group; without it
+    every node has its own ``nu``. The solve runs in float64; the output is
+    float32.
     """
 
-    def __init__(self, incidence, lo, hi, iterations=100, **kwargs):
+    def __init__(self, incidence, lo, hi, iterations=100, groups=None, max_step=5.0, **kwargs):
         super().__init__(**kwargs)
         self.incidence = np.asarray(incidence, dtype="float64")
         self.lo = np.asarray(lo, dtype="float64")
         self.hi = np.asarray(hi, dtype="float64")
         self.iterations = int(iterations)
+        n = self.incidence.shape[0] - 1
+        self.groups = np.eye(n) if groups is None else np.asarray(groups, dtype="float64")
+        self.max_step = float(max_step)
         self.n_static = int(np.sum(~np.isnan(self.hi)))
 
     def _bounds(self, z):
@@ -98,14 +110,15 @@ class BalancedFlows(tf.keras.layers.Layer):
     def call(self, inputs):
         raw = tf.cast(inputs[0], tf.float64)
         z = tf.cast(inputs[1], tf.float64)
-        A = tf.constant(self.incidence)
-        Ar = A[1:]                                         # lambda_V = 0
+        M = tf.constant(self.groups)
+        Ar = tf.matmul(M, tf.constant(self.incidence[1:]))  # lambda_V = 0; one row per group
         N = self.incidence.shape[0] - 1
+        k = self.groups.shape[0]
         nodes = tf.add_n(tf.split(z, z.shape[-1] // N, axis=-1))
-        b = nodes                                          # rows 1..N of the balance
+        b = tf.matmul(nodes, M, transpose_b=True)          # demand of each group
         lo, span = self._bounds(z)
         rhs = b - tf.matmul(lo, Ar, transpose_b=True)
-        eye = tf.eye(N, dtype=tf.float64)
+        eye = tf.eye(k, dtype=tf.float64)
 
         def pieces(r, lam):
             s = tf.sigmoid(r + tf.matmul(lam, Ar))
@@ -121,18 +134,28 @@ class BalancedFlows(tf.keras.layers.Layer):
         lo, span, rhs = (tf.stop_gradient(t) for t in (lo, span, rhs))
         lam = tf.zeros_like(rhs)
         mu = tf.fill(tf.shape(rhs)[:1], tf.constant(1e-3, tf.float64))
+        radius = tf.fill(tf.shape(rhs)[:1], tf.constant(self.max_step, tf.float64))
 
-        def body(k, lam, mu):
+        def body(k, lam, mu, radius):
             grad, hess = pieces(r0, lam)
             scale = tf.reduce_max(tf.linalg.diag_part(hess), axis=-1) + 1e-12
             step = -tf.linalg.solve(hess + (mu * scale)[:, None, None] * eye, grad[..., None])[..., 0]
-            better = objective(r0, lam + step) < objective(r0, lam)
+            # Trust region in logit units: a saturated sigmoid makes the Hessian nearly singular.
+            # It starts at max_step, doubles after an accepted step and halves after a rejected one.
+            size = tf.reduce_max(tf.abs(step), axis=-1)
+            step = step * tf.minimum(tf.constant(1.0, tf.float64), radius / tf.maximum(size, 1e-300))[:, None]
+            g0, g1 = objective(r0, lam), objective(r0, lam + step)
+            # When G no longer changes at machine precision, accept a step that lowers the residual.
+            flat = tf.abs(g1 - g0) <= 1e-12 * tf.maximum(tf.constant(1.0, tf.float64), tf.abs(g0))
+            closer = (tf.norm(pieces(r0, lam + step)[0], axis=-1) < tf.norm(grad, axis=-1))
+            better = (g1 < g0) | (flat & closer)
             lam = tf.where(better[:, None], lam + step, lam)
-            mu = tf.where(better, tf.maximum(mu / 3.0, 1e-9), tf.minimum(mu * 4.0, 1e6))
-            return k + 1, lam, mu
+            mu = tf.where(better, tf.maximum(mu / 3.0, 1e-12), tf.minimum(mu * 4.0, 1e12))
+            radius = tf.where(better, tf.minimum(2.0 * radius, 1e4), tf.maximum(0.5 * radius, 1e-8))
+            return k + 1, lam, mu, radius
 
-        _, lam, _ = tf.while_loop(lambda k, *_: k < self.iterations, body,
-                                  (tf.constant(0), lam, mu))
+        _, lam, _, _ = tf.while_loop(lambda k, *_: k < self.iterations, body,
+                                     (tf.constant(0), lam, mu, radius))
         lam = tf.stop_gradient(lam)
         # One differentiable Newton step: at the solution grad ~ 0, so it leaves
         # the value unchanged and gives d(lambda)/d(raw, z) by the implicit function theorem.
@@ -149,7 +172,8 @@ class BalancedFlows(tf.keras.layers.Layer):
         config = super().get_config()
         config.update({"incidence": self.incidence.tolist(), "lo": self.lo.tolist(),
                        "hi": [None if np.isnan(v) else v for v in self.hi],
-                       "iterations": self.iterations})
+                       "iterations": self.iterations, "groups": self.groups.tolist(),
+                       "max_step": self.max_step})
         return config
 
 
@@ -287,6 +311,22 @@ def zone_structure(sheets):
             "hi2": inf["Pmax"].values.astype("float64") ** 2}
 
 
+def _zone_intervals(d, zone, feeds, order, lo2, hi2):
+    """Level interval of every zone for offsets ``d``, leaving room for every downstream zone."""
+    lo, hi = {}, {}
+    for z in range(int(zone.max()) + 1):
+        idx = np.where(zone == z)[0]
+        dz = tf.gather(d, idx, axis=1)
+        lo[z] = tf.reduce_max(tf.constant(lo2[idx]) - dz, axis=1)
+        hi[z] = tf.reduce_min(tf.constant(hi2[idx]) - dz, axis=1)
+    for z in reversed(order):                              # backward: room downstream
+        for za, zb, a, b, r2 in feeds:
+            if za == z:
+                lo[z] = tf.maximum(lo[z], (lo[zb] + d[:, b]) / r2 - d[:, a])
+                hi[z] = tf.minimum(hi[z], hi[zb] + d[:, b] - d[:, a])
+    return lo, hi
+
+
 class ZonePressures(tf.keras.layers.Layer):
     """Node pressures with the Weymouth drops, pressure limits and compression windows exact.
 
@@ -310,17 +350,7 @@ class ZonePressures(tf.keras.layers.Layer):
         f = tf.cast(inputs[0], tf.float64)
         raw = tf.cast(inputs[1], tf.float64)
         d = tf.matmul(f * tf.abs(f) / tf.constant(self.k), tf.constant(self.offset), transpose_b=True)
-        lo, hi = {}, {}
-        for z in range(int(self.zone.max()) + 1):
-            idx = np.where(self.zone == z)[0]
-            dz = tf.gather(d, idx, axis=1)
-            lo[z] = tf.reduce_max(tf.constant(self.lo2[idx]) - dz, axis=1)
-            hi[z] = tf.reduce_min(tf.constant(self.hi2[idx]) - dz, axis=1)
-        for z in reversed(self.order):                     # backward: room downstream
-            for za, zb, a, b, r2 in self.feeds:
-                if za == z:
-                    lo[z] = tf.maximum(lo[z], (lo[zb] + d[:, b]) / r2 - d[:, a])
-                    hi[z] = tf.minimum(hi[z], hi[zb] + d[:, b] - d[:, a])
+        lo, hi = _zone_intervals(d, self.zone, self.feeds, self.order, self.lo2, self.hi2)
         level = {}
         for z in self.order:                               # forward: sigmoid in the window
             l, u = lo[z], hi[z]
@@ -343,44 +373,109 @@ class ZonePressures(tf.keras.layers.Layer):
 
 
 class PipeDemand(tf.keras.layers.Layer):
-    """What the pipes must deliver to each node: demand minus the non-pipe arcs' injections."""
+    """What the pipes must deliver to each node: demand minus the decision arcs' injections.
 
-    def __init__(self, non_pipe_incidence, pipe_columns, n_arcs, classes, nodes, **kwargs):
+    The decision arcs close every zone balance, so this sums to zero over each zone.
+    """
+
+    def __init__(self, decision_incidence, classes, nodes, **kwargs):
         super().__init__(**kwargs)
-        self.non_pipe = np.asarray(non_pipe_incidence, dtype="float64")
-        self.pipe_columns = [int(c) for c in pipe_columns]
-        self.n_arcs = int(n_arcs)
+        self.decision = np.asarray(decision_incidence, dtype="float64")
         self.classes = tuple(classes)
         self.nodes = int(nodes)
 
     def call(self, inputs):
         arcs, z = tf.cast(inputs[0], tf.float64), tf.cast(inputs[1], tf.float64)
-        keep = [c for c in range(arcs.shape[-1]) if c not in self.pipe_columns]
-        injected = tf.matmul(tf.gather(arcs, keep, axis=1), tf.constant(self.non_pipe), transpose_b=True)
+        injected = tf.matmul(arcs, tf.constant(self.decision), transpose_b=True)
         demand = tf.add_n(tf.split(z, len(self.classes), axis=-1))
         return tf.cast(demand - injected, tf.float32)
 
     def get_config(self):
         config = super().get_config()
-        config.update({"non_pipe_incidence": self.non_pipe.tolist(), "pipe_columns": self.pipe_columns,
-                       "n_arcs": self.n_arcs, "classes": list(self.classes), "nodes": self.nodes})
+        config.update({"decision_incidence": self.decision.tolist(), "classes": list(self.classes),
+                       "nodes": self.nodes})
         return config
 
 
-class ReplacePipes(tf.keras.layers.Layer):
-    """Put the minimum-energy pipe flows in place of the closure's pipe columns."""
+class CapacityScale(tf.keras.layers.Layer):
+    """Scale all served gas by one factor ``theta`` so pipe and pressure limits hold.
 
-    def __init__(self, start, count, **kwargs):
+    Inputs ``(decisions, pipes, z)``: decision arcs ``[sources, comps,
+    unsupplied per class]``, pipe flows and demand. Scaling every injection by
+    ``theta`` scales every pipe flow by ``theta`` and every Weymouth drop by
+    ``theta^2``, so balance and Weymouth stay exact; ``theta = 0`` (nothing
+    served) is always feasible. ``theta`` is the largest value at most 1 with
+    every pipe inside its limits and every zone level interval non-empty.
+    The pipe part is a closed-form minimum; the pressure part, found by
+    bisection on ``theta^2`` (feasibility is monotone in it), carries no
+    gradient. Outputs ``(decisions, pipes, theta)`` after scaling; the gas not
+    served is added to the unsupplied arcs.
+    """
+
+    def __init__(self, f_max, f_min, k, zone, offset, feeds, order, lo2, hi2, n_served,
+                 bisections=50, **kwargs):
         super().__init__(**kwargs)
-        self.start, self.count = int(start), int(count)
+        self.f_max = np.abs(np.asarray(f_max, dtype="float64"))
+        self.f_min = np.abs(np.asarray(f_min, dtype="float64"))
+        self.k = np.asarray(k, dtype="float64")
+        self.zone = np.asarray(zone, dtype="int64")
+        self.offset = np.asarray(offset, dtype="float64")
+        self.feeds = [tuple(f) for f in feeds]
+        self.order = [int(z) for z in order]
+        self.lo2 = np.asarray(lo2, dtype="float64")
+        self.hi2 = np.asarray(hi2, dtype="float64")
+        self.n_served = int(n_served)
+        self.bisections = int(bisections)
+
+    def _feasible(self, drop, s):
+        d = s[:, None] * tf.matmul(drop, tf.constant(self.offset), transpose_b=True)
+        lo, hi = _zone_intervals(d, self.zone, self.feeds, self.order, self.lo2, self.hi2)
+        tol = 1e-9 * float(self.hi2.max())
+        return tf.reduce_all(tf.stack([lo[z] <= hi[z] + tol for z in lo], axis=1), axis=1)
 
     def call(self, inputs):
-        arcs, pipes = inputs
-        return tf.concat([arcs[:, :self.start], pipes, arcs[:, self.start + self.count:]], axis=-1)
+        x, f, z = (tf.cast(t, tf.float64) for t in inputs)
+        lim = tf.where(f >= 0, tf.constant(self.f_max), tf.constant(self.f_min))
+        ratio = lim / tf.maximum(tf.abs(f), 1e-12)
+        theta_q = tf.minimum(tf.constant(1.0, tf.float64), tf.reduce_min(tf.concat([ratio, tf.ones_like(ratio[:, :1])], 1), axis=1))
+        drop = tf.stop_gradient(f * tf.abs(f) / tf.constant(self.k))
+        top = tf.stop_gradient(theta_q) ** 2
+        fits = self._feasible(drop, top)
+        a, b = tf.zeros_like(top), top
+        for _ in range(self.bisections):
+            m = 0.5 * (a + b)
+            ok = self._feasible(drop, m)
+            a, b = tf.where(ok, m, a), tf.where(ok, b, m)
+        theta = tf.where(fits, theta_q, tf.stop_gradient(tf.sqrt(a)))[:, None]
+        served, unsupplied = x[:, :self.n_served], x[:, self.n_served:]
+        unsupplied = z - theta * (z - unsupplied)
+        return (tf.cast(tf.concat([theta * served, unsupplied], 1), tf.float32),
+                tf.cast(theta * f, tf.float32), tf.cast(theta, tf.float32))
 
     def get_config(self):
         config = super().get_config()
-        config.update({"start": self.start, "count": self.count})
+        config.update({"f_max": self.f_max.tolist(), "f_min": self.f_min.tolist(), "k": self.k.tolist(),
+                       "zone": self.zone.tolist(), "offset": self.offset.tolist(),
+                       "feeds": [list(f) for f in self.feeds], "order": self.order,
+                       "lo2": self.lo2.tolist(), "hi2": self.hi2.tolist(),
+                       "n_served": self.n_served, "bisections": self.bisections})
+        return config
+
+
+class AssembleArcs(tf.keras.layers.Layer):
+    """Arc flows in augmented order ``[sources, pipes, comps, unsupplied]``."""
+
+    def __init__(self, n_sources, **kwargs):
+        super().__init__(**kwargs)
+        self.n_sources = int(n_sources)
+
+    def call(self, inputs):
+        decisions, pipes = inputs
+        return tf.concat([decisions[:, :self.n_sources], pipes, decisions[:, self.n_sources:]], axis=-1)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"n_sources": self.n_sources})
         return config
 
 
@@ -399,7 +494,7 @@ def mean_prediction(y_true, y_pred):
     return tf.reduce_mean(y_pred)
 
 
-def flow_model_v2(path, fd=None, a=1e-4, b=1e-4, c=1e-4, seed=1, classes=("Res",), iterations=100):
+def flow_model_v2(path, fd=None, a=1e-4, b=1e-4, c=1e-4, seed=1, classes=("Res",), iterations=200):
     """Build and compile the v2 gas model.
 
     The input holds the demand of each class in ``classes`` as consecutive
@@ -417,6 +512,8 @@ def flow_model_v2(path, fd=None, a=1e-4, b=1e-4, c=1e-4, seed=1, classes=("Res",
     if not classes or unknown or len(set(classes)) != len(classes):
         raise ValueError(f"classes must be distinct names from {DEMAND_CLASSES}, got {classes!r}")
     sh = read_network(path)
+    if (sh["well"]["Imin"].values > 0).any():
+        raise ValueError("capacity scaling needs every source minimum Imin to be zero")
     w = gen_w(sh["inf"], sh["well"], sh["pipe"], sh["comp"], sh["dc"], sh["sto"])
     N, C = w.shape[0], len(classes)
     nw, npi, nc = len(sh["well"]), len(sh["pipe"]), len(sh["comp"])
@@ -428,19 +525,25 @@ def flow_model_v2(path, fd=None, a=1e-4, b=1e-4, c=1e-4, seed=1, classes=("Res",
     In = Input(shape=(N * C,))
     x = Dense(w.shape[1] * 4, "selu", kernel_regularizer=regularizers.L1L2(a, a))(In)
     raw_sources = Dense(nw, kernel_initializer=initializer, name="raw_sources")(BatchNormalization()(x))
-    raw_pipes = Dense(npi, kernel_initializer=initializer, name="raw_pipes")(BatchNormalization()(x))
     raw_comps = Dense(nc, kernel_initializer=initializer, name="raw_comps")(BatchNormalization()(x))
     xt = Dense(N * C, "selu", kernel_regularizer=regularizers.L1L2(b, b), kernel_initializer=initializer)(x)
     raw_unsupplied = BatchNormalization(name="raw_unsupplied")(xt)
-    raw = tf.keras.layers.Concatenate(name="raw")([raw_sources, raw_pipes, raw_comps, raw_unsupplied])
-    arcs = BalancedFlows(A, lo, hi, iterations=iterations, name="arcs")([raw, In])
+    raw = tf.keras.layers.Concatenate(name="raw")([raw_sources, raw_comps, raw_unsupplied])
 
-    real = A[1:]
-    pipe_cols = list(range(nw, nw + npi))
-    non_pipe = real[:, [c for c in range(A.shape[1]) if c not in pipe_cols]]
-    rhs = PipeDemand(non_pipe, pipe_cols, A.shape[1], classes, N, name="pipe_demand")([arcs, In])
+    # Solver 1: one nu per zone closes every zone balance with the decision arcs.
+    dec = [c for c in range(A.shape[1]) if not nw <= c < nw + npi]
+    groups = np.zeros((int(zones["zone"].max()) + 1, N))
+    groups[zones["zone"], np.arange(N)] = 1.0
+    decisions = BalancedFlows(A[:, dec], lo[dec], hi[dec], iterations=iterations, groups=groups,
+                              name="decisions")([raw, In])
+    # Solver 2: the pipes deliver what each node still needs, rotated around each loop by Weymouth.
+    rhs = PipeDemand(A[1:, dec], classes, N, name="pipe_demand")([decisions, In])
     f_pipes = PipeFlows(pipes["pinv"], pipes["loops"], pipes["k"], name="pipe_flows")(rhs)
-    arcs = ReplacePipes(nw, npi, name="arcs_physical")([arcs, f_pipes])
+    decisions, f_pipes, _ = CapacityScale(sh["pipe"]["Fg_max"].values, sh["pipe"]["Fg_min"].values, pipes["k"],
+                                          zones["zone"], zones["offset"], zones["feeds"], zones["order"],
+                                          zones["lo2"], zones["hi2"], nw + nc,
+                                          name="capacity")([decisions, f_pipes, In])
+    arcs = AssembleArcs(nw, name="arcs")([decisions, f_pipes])
     F = FlowVector(nw + npi + nc, classes, N, 2 * len(sh["sto"]), name="F")(arcs)
 
     x1 = BatchNormalization()(In)
