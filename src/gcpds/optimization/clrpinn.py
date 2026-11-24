@@ -1,4 +1,4 @@
-"""CL-PINN (Closure-Layer PINN) for the gas network: every hard constraint holds by construction.
+"""CL-RPINN (Closure-Layer Regularized Physics-Informed Neural Network) for the gas network: every hard constraint holds by construction.
 
 This module extends the RPINN gas model in ``model_real_data_`` without
 modifying it. The network makes the economic decision (raw outputs, trained); three
@@ -49,10 +49,10 @@ from tensorflow.keras import regularizers
 from gcpds.optimization.model_real_data_ import FixedWeightsConstraint, gen_w
 
 def _default_data_dir() -> Path:
-    env = os.environ.get("CLPINN_DATA_DIR")
+    env = os.environ.get("CLRPINN_DATA_DIR")
     if env:
         return Path(env)
-    return Path(__file__).resolve().parents[3] / "CLPINN" / "Data"
+    return Path(__file__).resolve().parents[3] / "CLRPINN" / "Data"
 
 
 #: Networks (``Redes``) and, per scenario ``S``/``M``/``D``, the inputs and the IPOPT reference (``MAPE/*_P.mat``).

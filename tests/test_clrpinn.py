@@ -1,4 +1,4 @@
-"""Invariants of the CL-PINN gas model: every flow bounded and every node balanced by construction."""
+"""Invariants of the CL-RPINN gas model: every flow bounded and every node balanced by construction."""
 import numpy as np
 import pandas as pd
 import pytest
@@ -7,7 +7,7 @@ import scipy.io as sio
 tf = pytest.importorskip("tensorflow")
 
 from gcpds.optimization import model_real_data_ as v1  # noqa: E402
-from gcpds.optimization import clpinn as v2  # noqa: E402
+from gcpds.optimization import clrpinn as v2  # noqa: E402
 from keras import Model  # noqa: E402
 
 REDES = v2.DATA_DIR / "Redes"
