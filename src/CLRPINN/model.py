@@ -46,13 +46,13 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 from tensorflow.keras import regularizers
 
-from gcpds.optimization.model_real_data_ import FixedWeightsConstraint, gen_w
+from RPINN.model_real_data_ import FixedWeightsConstraint, gen_w
 
 def _default_data_dir() -> Path:
     env = os.environ.get("CLRPINN_DATA_DIR")
     if env:
         return Path(env)
-    return Path(__file__).resolve().parents[3] / "CLRPINN" / "Data"
+    return Path(__file__).resolve().parents[2] / "CLRPINN" / "Data"
 
 
 #: Networks (``Redes``) and, per scenario ``S``/``M``/``D``, the inputs and the IPOPT reference (``MAPE/*_P.mat``).

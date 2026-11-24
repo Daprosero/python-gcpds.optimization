@@ -6,8 +6,8 @@ import scipy.io as sio
 
 tf = pytest.importorskip("tensorflow")
 
-from gcpds.optimization import model_real_data_ as v1  # noqa: E402
-from gcpds.optimization import clrpinn as v2  # noqa: E402
+from RPINN import model_real_data_ as v1  # noqa: E402
+from CLRPINN import model as v2  # noqa: E402
 from keras import Model  # noqa: E402
 
 REDES = v2.DATA_DIR / "Redes"

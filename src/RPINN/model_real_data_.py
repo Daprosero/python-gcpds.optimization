@@ -50,7 +50,7 @@ def _default_data_dir() -> Path:
     env = os.environ.get("RPINN_DATA_DIR")
     if env:
         return Path(env)
-    return Path(__file__).resolve().parents[3] / "RPINN" / "Data"
+    return Path(__file__).resolve().parents[2] / "RPINN" / "Data"
 
 
 DATA_DIR = _default_data_dir()

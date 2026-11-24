@@ -5,7 +5,7 @@ Each module declares the sections and equations it implements in
 test under tests/.
 """
 
-__all__ = []
+__all__ = ["set_seed"]
 
 __implementation__ = {
     # The managed revision this declaration is bound to -- a filename under
@@ -191,3 +191,10 @@ __steps__: dict = {}
 #         },
 #     }
 __records__: dict = {}
+
+
+def set_seed(seed: int = 1) -> None:
+    """Seed Python, NumPy and TensorFlow so a run is reproducible."""
+    import tensorflow as tf
+
+    tf.keras.utils.set_random_seed(seed)

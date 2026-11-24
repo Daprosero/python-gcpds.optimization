@@ -12,5 +12,5 @@ Submodules
 .. toctree::
    :maxdepth: 4
 
-   optimization.model_real_data_
-   optimization.model_synthetic_data_
+   RPINN.model_real_data_
+   RPINN.model_synthetic_data_

@@ -13,8 +13,8 @@ import pytest
 
 tf = pytest.importorskip("tensorflow")
 
-from gcpds.optimization import model_real_data_ as real  # noqa: E402
-from gcpds.optimization import model_synthetic_data_ as synth  # noqa: E402
+from RPINN import model_real_data_ as real  # noqa: E402
+from RPINN import model_synthetic_data_ as synth  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 RESULTS = REPO / "RPINN" / "Results" / "portability"
