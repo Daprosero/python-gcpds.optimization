@@ -27,6 +27,8 @@ setup(
         "seaborn",
         "openpyxl",
         "ipython",
+        "gekko==1.0.6",
+        "xlsxwriter",
     ],
     scripts=[
     ],

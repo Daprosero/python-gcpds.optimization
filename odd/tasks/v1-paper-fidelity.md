@@ -21,10 +21,10 @@ Objective: make the v1 code (src/RPINN + RPINN/Notebooks) reproduce the publishe
 |---|---|---|---|---|
 | T0 | S10 | inline | done | Mac M2 CPU 0.016-0.030 s/epoch (current arch, ~900 samples); Mac Metal GPU 0.205-0.239 s/epoch; IPOPT 0.05-0.08 s solve when it converges, hangs without a cap |
 | T1 | S3 S4 | inline | done | RED 3 failed (127467 params, 2 outputs) -> GREEN 4 passed; test_portability old-weight load fails until T6 regenerates the weights |
-| T2 | S5 | inline | pending | |
+| T2 | S5 | inline | done | RED collection error (no module) -> GREEN 11 passed; pilot net 8 S s=1 on VivoBook 600 epochs 55 s: balance rel. error median 0.89%, Weymouth 0.79%, ratio in bounds 99.7% |
 | T3 | S6 S8 | inline | pending | |
 | T4 | S7 S8 | inline | pending | |
-| T5 | S10 | inline | pending | timing of the new architecture, then full estimate |
+| T5 | S10 | inline | done | totals (9 nets x 3 scenarios x 2 models x 600 epochs): VivoBook CPU 64 min, MSI CPU 105 min, MSI GPU 467 min, Mac CPU 59 min (excluded by operator) |
 | T6 | S9 | inline | pending | full regeneration run |
 | T7 | S9 | inline | pending | notebooks + figures 7-12 + tables |
 
@@ -35,4 +35,11 @@ Objective: make the v1 code (src/RPINN + RPINN/Notebooks) reproduce the publishe
 - L3 (2026-11-25) Audit (read-only explorer): saved Modelo2 weights have 127,467 params and no code produces them; gas loss lacks cost; mixture is 5 params/relu/Adamax/100 epochs vs SCS l1; IPOPT comparison filtered to converged samples (D: 3-13 per net); MAPE as fraction. Paper table decomposes exactly to 12,707 with the S4 layout (partial flows 1896 + 378 = 2274).
 - L4 (2026-11-25) "si, no hay lío, pero en redes no colocaría el costo donde los otras restricciones den, es la que menor costo tiene, es que al no estar normalizado en comparación esos loss se ven opacados respecto al costo, por eso se lo quite"
 - L5 (2026-11-25) T1: gas model rebuilt to tab:arch-gas (12,707 on net 8), losses split into WeymouthLoss and RatioPenaltyLoss with LOSS_WEIGHTS 0.6/0.1/0.3, no cost term. Known failure until T6: tests/test_portability.py loads the pre-change weights.
-- Next: T2.
+- L6 (2026-11-25) Scenario offsets: one set (training notebook) for train and test; 20,000 draws give source-capacity exceedance S 1-2%, M 49-50%, D 99-100% on all 9 nets. IPOPT class ported to src/RPINN/ipopt_gas.py with a max_time cap (works: 'Time Limit Exceeded'). Finding: on the Mac, samples 2 and 3 of the stored S pool for net 8 (kept originally because IPOPT converged) do not converge in 60-180 s, with GEKKO 1.3.3 and with the paper's 1.0.6 alike; samples 0 and 1 solve in 0.2-1.7 s. Open: test the Linux binary (paper ran on Colab, Linux).
+- L7 (2026-11-25) "no veo la comparación de tiempos de cpu,gpu tanto en mac como en el de debin como en el linux, no la veo". Mac M2, paper architecture, 14,000 training samples, batch 256: CPU 0.079/0.108/0.151 s/epoch (nets 8/12/Col18, 12,707/26,295/54,866 params); Metal GPU 1.637/1.673/1.788 s/epoch (about 12-20x slower). MSI (Debian) and Lenovo (Linux) not measured yet: need remote authorization.
+- L8 (2026-11-25) "en los dos, esa fue la misín y ya con eso decidimos". MSI (Debian WSL, i7-10750H, GTX 1650), same probe: CPU 0.159/0.190/0.247 s/epoch; GPU 0.877/0.847/0.886 s/epoch. IPOPT on Linux, GEKKO 1.0.6, 60 s cap, net 8 S pool: samples 0-1 ok in 0.1 s, samples 2-3 Time Limit Exceeded, same as the Mac, so the Mac binary is not the cause. Lenovo not measured: access details unknown.
+- L9 (2026-11-25) "eso ya lo tenes,cómo así la cotraseña es linux". The Linux laptop is diego-vivobook (Tailscale 100.66.48.2, user carlos, key auth), AMD Ryzen 7 7730U, 10 threads, 38 GB, AMD Barcelo integrated GPU (no CUDA, CPU only). CPU 0.088/0.112/0.170 s/epoch. IPOPT: samples 0-1 ok, 2-3 Time Limit Exceeded, same as Mac and MSI. Fastest: Mac CPU, VivoBook CPU about 10% behind.
+- L10 (2026-11-25) "SI SE PUEDE USAR, LA GPU DE LA AMD YA LA USASTE, NO TE ESTPY PIDIENDO NADA NUEVO". Correct: ~/bench/rocm6 (torch 2.5.1+rocm6.2, HSA_OVERRIDE_GFX_VERSION=9.0.0; ROCm 7.1 lacks gfx90c) drives the Barcelo GPU. The paper code is TensorFlow, which has no ROCm build installed there (no system ROCm under /opt). PyTorch same-size stand-in (not the paper code): GPU 0.079/0.080/0.085, CPU 0.097/0.098/0.105 s/epoch.
+- L11 (2026-11-25) "con la mac no cuentes esta ves, necesito el espacio para seguir trabajando en mis cosas pero regenrear todo eso de v1 y ya con eso listo tener como planear la compración en v2, pero eso lo discutimos despues." Decision: compute runs on VivoBook CPU and MSI CPU, split by network; the Mac only edits code. V2 comparison deferred.
+- L12 (2026-11-25) T2: src/RPINN/paper_runs.py (train/collect CLI), seeded per net and scenario, 70/30 split, LR /10 at 400/500/580, fd and per-epoch record saved beside the weights; setup.py adds gekko==1.0.6 and xlsxwriter.
+- Next: investigate the IPOPT non-convergence (identical on 3 machines), then T2.
