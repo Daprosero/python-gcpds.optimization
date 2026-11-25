@@ -659,6 +659,44 @@ class CustomLossFuntion(tf.keras.losses.Loss):
             "s": self.s
         }
 
+#: Penalty weights (lambda_L1, lambda_N1, lambda_N2) of node balance, Weymouth and compression
+#: ratio; they sum to one and lambda_L, the cost weight, is zero.
+LOSS_WEIGHTS = [0.6, 0.1, 0.3]
+
+
+class WeymouthLoss(tf.keras.losses.Loss):
+    """Huber penalty between each pipe flow and the flow its end pressures imply (Weymouth)."""
+
+    def __init__(self, Kt, i, j, find, name="Wey"):
+        super().__init__(name=name)
+        self.Kt, self.i, self.j, self.find = Kt, i, j, find
+
+    def call(self, y_true, y_pred):
+        f = tf.cast(y_pred[:, :self.find], tf.float32)
+        P = tf.cast(y_pred[:, self.find:], tf.float32)
+        pi = tf.gather(P, self.i, axis=1)
+        pj = tf.gather(P, self.j, axis=1)
+        return tf.keras.losses.huber(f, tf.sign(pi**2 - pj**2) * tf.sqrt(self.Kt * tf.abs(pi**2 - pj**2)))
+
+
+class RatioPenaltyLoss(tf.keras.losses.Loss):
+    """Clipped parabola on the compression ratio: zero inside [1, beta_max], growing from the middle of the range outside."""
+
+    def __init__(self, Bc, ic, jc, find, name="Ratio"):
+        super().__init__(name=name)
+        self.ic, self.jc, self.find = ic, jc, find
+        self.lower_bound = tf.constant(1.0, dtype=tf.float32)
+        self.upper_bound = tf.constant(Bc, dtype=tf.float32)
+
+    def call(self, y_true, y_pred):
+        P = tf.cast(y_pred[:, self.find:], tf.float32)
+        ratio = tf.math.divide_no_nan(tf.gather(P, self.jc, axis=1), tf.gather(P, self.ic, axis=1))
+        middle = 0.5 * (self.upper_bound + self.lower_bound)
+        span = self.upper_bound - self.lower_bound
+        inside = tf.math.logical_and(ratio >= self.lower_bound, ratio <= self.upper_bound)
+        return tf.reduce_mean(tf.where(inside, 0.0, tf.square((ratio - middle) / span)))
+
+
 class FixedWeightsConstraint(tf.keras.constraints.Constraint):
     def __init__(self, w):
         self.w = tf.constant(w.T, dtype=tf.float32)  # Asegúrate de que `w` está en el formato correcto antes de convertirlo a un tensor.
@@ -698,76 +736,69 @@ def flow_model(path, fd,a=1e-4,b=1e-4,c=1e-4, s=1, seed=1):
     tf.keras.utils.set_random_seed(seed)  # seeds Python, NumPy and TensorFlow
     initializer = tf.keras.initializers.GlorotNormal(seed=seed)
     In = Input(shape=(N,))
-    N1 = N
-    x=Dense(w.shape[1]*4,'selu',kernel_regularizer=regularizers.L1L2(a,a))(In)
-    F = []
+    reg = regularizers.L1L2
+
+    def bounded(tensor, lower, upper, name):
+        """Bounded dense layer: a scaled sigmoid keeps every output in [lower, upper]."""
+        return Dense(len(lower), name=name, kernel_initializer=initializer,
+                     activation=CustomSigmoidActivation(lower, upper))(tensor)
+
+    # Flow branch (Table tab:arch-gas): Dense_1 and one shared BatchNormalization_1.
+    x = Dense(w.shape[1] * 4, 'selu', kernel_regularizer=reg(a, a), kernel_initializer=initializer,
+              name='Dense_1')(In)
+    xb = BatchNormalization(name='BatchNormalization_1')(x)
+    F0 = WellDense(well=Data_W['Imax'].values[0], name='F_0')(In)
+    zeros = lambda col: Data_D[col].values * 0.0
+    others = ['Ind', 'Com', 'NGV', 'Ref', 'Pet']
     if s == 0:
-        Li = np.concatenate((Data_T['Fg_min'].values, [0] * len(Data_C), Data_D['Res'].values * 0.0, Data_D['Ind'].values * 0.0, Data_D['Com'].values * 0.0,
-                            Data_D['NGV'].values * 0.0, Data_D['Ref'].values*0.0,
-                            Data_D['Pet'].values * 0.0, [0] * len(Data_sto.values) * 2))
-        Ls = np.concatenate((Data_T['Fg_max'].values, Data_C['fmaxc'].values, fd, Data_D['Ind'].values * 0.0, Data_D['Com'].values * 0.0, Data_D['NGV'].values * 0.0, Data_D['Ref'].values * 0.0, Data_D['Pet'].values * 0.0,
-                            (Data_sto['V0'].values - Data_sto['V_max'].values) * 0.0, (Data_sto['Vmax'].values - Data_sto['V0'].values) * 0.0))
-        F = []
-        F0 = WellDense(well=Data_W['Imax'].values[0], name='F_0')(In)
-        F1 = create_customized_dense_layer(x,Li,'F_1',CustomSigmoidActivation(Li,Ls),initializer)
-        F = Concatenate(name='F')([F0, F1])  # ,F2,F3])
-
+        Li = np.concatenate((Data_T['Fg_min'].values, [0] * len(Data_C), zeros('Res'),
+                             *(zeros(k) for k in others), [0] * len(Data_sto.values) * 2))
+        Ls = np.concatenate((Data_T['Fg_max'].values, Data_C['fmaxc'].values, fd, *(zeros(k) for k in others),
+                             (Data_sto['V0'].values - Data_sto['V_max'].values) * 0.0,
+                             (Data_sto['Vmax'].values - Data_sto['V0'].values) * 0.0))
+        F1 = bounded(xb, Li, Ls, 'F_1')
+        F = Concatenate(name='F')([F0, F1])
     elif s == 1:
-        fdin = len(Data_W['Imin'].values) + \
-            len([0] * len(Data_T)) + len([0] * len(Data_C))
-        fdfn = len([0] * len(Data_sto.values) * 2) + \
-            len(Data_inf['Pmin'].values)
-        F0 = WellDense(well=Data_W['Imax'].values[0], name='F_0')(In)
-        Li = Data_T['Fg_min'].values
-        Ls = Data_T['Fg_max'].values
-        F1 = create_customized_dense_layer(x,Li,'F_1',CustomSigmoidActivation(Li,Ls),initializer)
-
-        Li = [0] * len(Data_C)
-        Ls = Data_C['fmaxc'].values
-        F2 = create_customized_dense_layer(x,Li,'F_2',CustomSigmoidActivation(Li,Ls),initializer)
-        xt=Dense(N1,'selu',kernel_regularizer=regularizers.L1L2(b,b),kernel_initializer=initializer)(x)
-        xt=BatchNormalization()(xt)
+        F1 = bounded(xb, Data_T['Fg_min'].values, Data_T['Fg_max'].values, 'F_1')
+        F2 = bounded(xb, [0] * len(Data_C), Data_C['fmaxc'].values, 'F_2')
+        # Unsupplied gas: Dense_2 and BatchNormalization_2 feed the unsupplied-gas switch.
+        xt = Dense(N, 'selu', kernel_regularizer=reg(b, b), kernel_initializer=initializer, name='Dense_2')(x)
+        xt = BatchNormalization(name='BatchNormalization_2')(xt)
         F3 = RestrictedDense(
             initializer=initializer, well=Data_W['Imax'].values[0], name='F_3', units=len(Data_inf))([xt, In, F0])
-        Li=np.concatenate((Data_D['Ind'].values*0.0,Data_D['Com'].values*0.0,Data_D['NGV'].values*0.0,Data_D['Ref'].values*0.0,
-                        Data_D['Pet'].values*0.0,[0]*len(Data_sto.values)*2))
-        Ls=np.concatenate((Data_D['Ind'].values*0.0,Data_D['Com'].values*0.0,Data_D['NGV'].values*0.0,Data_D['Ref'].values*0.0,Data_D['Pet'].values*0.0,
-                    (Data_sto['V0'].values-Data_sto['V_max'].values)*0.0,(Data_sto['Vmax'].values-Data_sto['V0'].values)*0.0))
-        F4 = create_customized_dense_layer(In,Li,'F_4',CustomSigmoidActivation(Li,Ls),initializer)
+        Li = np.concatenate((*(zeros(k) for k in others), [0] * len(Data_sto.values) * 2))
+        Ls = np.concatenate((*(zeros(k) for k in others),
+                             (Data_sto['V0'].values - Data_sto['V_max'].values) * 0.0,
+                             (Data_sto['Vmax'].values - Data_sto['V0'].values) * 0.0))
+        F4 = bounded(In, Li, Ls, 'F_4')
         F = Concatenate(name='F')([F0, F1, F2, F3, F4])
 
-    Out1=Dense(units=w.shape[0],use_bias=False,kernel_constraint=FixedWeightsConstraint(w),name='Bal')(F)
+    Out1 = Dense(units=w.shape[0], use_bias=False, kernel_constraint=FixedWeightsConstraint(w), name='Bal')(F)
 
-    Kt=tf.constant(Data_T['Kij'].values,dtype=tf.float32)
-    i=Data_T['fnode'].values-1
-    j=Data_T['tnode'].values-1
-    ftin=len(Data_W)
-    ftfn=len(Data_T)
-    f=F[:,ftin:ftfn+ftin]
-    Li=Data_inf['Pmin'].values
-    Ls=Data_inf['Pmax'].values
-    
-    
-    x1=BatchNormalization()(In)
-    x1=Dense(w.shape[1]*4,'selu',kernel_regularizer=regularizers.L1L2(c,c),kernel_initializer=initializer)(x1)
-    x1=BatchNormalization()(x1)
-    x1=Dense(w.shape[1]*4,'selu',kernel_regularizer=regularizers.L1L2(c,c),kernel_initializer=initializer)(x1)
-    x1=BatchNormalization()(x1)
-    x1=Dense(w.shape[1]*4,'selu',kernel_regularizer=regularizers.L1L2(c,c),kernel_initializer=initializer)(x1)
-    x1=BatchNormalization()(x1)
-    
-    ib=Data_C['fnode'].values-1
-    jb=Data_C['tnode'].values-1
-    P =create_custom_pres_layer(x1,Li,Ls,'P',initializer)
-
-    Out2 = Concatenate(name='Wey')([f, P])
-    Out3 = P
-
+    Kt = tf.constant(Data_T['Kij'].values, dtype=tf.float32)
+    i = Data_T['fnode'].values - 1
+    j = Data_T['tnode'].values - 1
+    ftin = len(Data_W)
+    ftfn = len(Data_T)
+    f = F[:, ftin:ftfn + ftin]
+    ib = Data_C['fnode'].values - 1
+    jb = Data_C['tnode'].values - 1
     Bc = Data_C['ratio'].values
 
-    model = Model(In, [Out1, Out2])
-    model.compile(loss={'Bal': 'huber', 'Wey': CustomLossFuntion(Kt,i,j,Bc,ib,jb,ftfn)},
-                  optimizer=tf.keras.optimizers.Adamax(1e-2), loss_weights=[0.5, 0.5])
+    # Pressure branch: Dense_3, BatchNormalization_3 and the bounded pressure layer that reads it.
+    x1 = Dense(w.shape[1] * 4, 'selu', kernel_regularizer=reg(c, c), kernel_initializer=initializer,
+               name='Dense_3')(In)
+    x1 = BatchNormalization(name='BatchNormalization_3')(x1)
+    P = create_custom_pres_layer(x1, Data_inf['Pmin'].values, Data_inf['Pmax'].values, 'P', initializer)
+
+    Out2 = Concatenate(name='Wey')([f, P])
+    Out3 = Concatenate(name='Ratio')([f, P])
+    model = Model(In, [Out1, Out2, Out3])
+    # lambda_L = 0: the operating cost is left out of training (unnormalized, it drowns the
+    # constraint penalties); it is measured at evaluation.
+    model.compile(loss={'Bal': 'huber', 'Wey': WeymouthLoss(Kt, i, j, ftfn),
+                        'Ratio': RatioPenaltyLoss(Bc, ib, jb, ftfn)},
+                  optimizer=tf.keras.optimizers.Adamax(1e-2), loss_weights=LOSS_WEIGHTS)
     return model
 
 
