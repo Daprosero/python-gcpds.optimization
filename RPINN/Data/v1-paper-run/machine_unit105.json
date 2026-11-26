@@ -1,0 +1,30 @@
+{
+ "unit": {
+  "kind": "gas",
+  "tip": "D",
+  "net": "Col",
+  "part": 1,
+  "start": 80,
+  "stop": 160,
+  "unit": 105
+ },
+ "machine": {
+  "cpu": "Intel(R) Xeon(R) CPU @ 2.20GHz",
+  "cores": 4,
+  "python": "3.11.18",
+  "platform": "Linux-6.18.55+-x86_64-with-glibc2.39",
+  "versions": {
+   "numpy": "1.26.4",
+   "tensorflow": null,
+   "tensorflow-cpu": "2.15.0",
+   "gekko": "1.0.6",
+   "pandas": "3.0.6"
+  }
+ },
+ "result": {
+  "trained": [],
+  "ipopt_samples": 80,
+  "converged": 21,
+  "seconds": 917.7043824479999
+ }
+}
