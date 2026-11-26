@@ -218,3 +218,10 @@ def test_gas_unit_smoke_writes_models_ipopt_part_and_machine(tmp_path):
     assert len(part["status"]) == 2 and int(part["start"]) == 0
     m = __import__("json").loads((tmp_path / "machine_unit000.json").read_text())
     assert m["machine"]["cores"] >= 1 and m["result"]["ipopt_samples"] == 2
+
+
+def test_isolated_unit_runs_the_cli_with_the_pinned_environment():
+    cmd = ku.unit_command("/env/bin/python", 7, "/w/out", 4, None, 8)
+    assert cmd == ["/env/bin/python", "-m", "RPINN.kaggle_units", "run", "--unit", "7", "--out", "/w/out",
+                   "--workers", "4", "--samples", "8"]
+    assert "tensorflow-cpu==2.15.0" in ku.PINS and "gekko==1.0.6" in ku.PINS and ku.PYTHON == "3.11"

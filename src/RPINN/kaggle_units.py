@@ -14,6 +14,9 @@ Usage::
 
     python -m RPINN.kaggle_units list
     python -m RPINN.kaggle_units run --unit K --out DIR [--workers 4] [--epochs 600] [--samples 80]
+
+On a remote worker the job calls ``run_unit_isolated``, which runs the same command under
+Python 3.11 with the pinned packages of the original runs (``PINS``).
 """
 from __future__ import annotations
 
@@ -29,6 +32,13 @@ from pathlib import Path
 
 PARTS = 4
 MIXTURE_SPLITS = ((0, 50), (50, 100))
+
+# The exact environment the VivoBook runs used. Remote images now ship Python 3.13, for which
+# TensorFlow 2.15 has no wheel, so ``run_unit_isolated`` builds this one beside the image's own.
+PYTHON = "3.11"
+PINS = ("tensorflow-cpu==2.15.0", "keras==2.15.0", "gekko==1.0.6", "numpy==1.26.4", "pandas==3.0.6",
+        "scipy==1.17.1", "scikit-learn==1.9.1", "h5py==3.16.0", "cvxpy==1.7.5", "openpyxl==3.1.5",
+        "xlsxwriter==3.3.4", "matplotlib==3.11.2", "seaborn==0.13.2", "ipython==9.19.1")
 
 
 def units() -> list[dict]:
@@ -112,6 +122,29 @@ def run_unit(k: int, out: Path, workers: int = 4, epochs: int | None = None, sam
         info["result"] = run_mixture(u, out, workers, samples)
     (out / f"machine_unit{k:03d}.json").write_text(json.dumps(info, indent=1))
     return info
+
+
+def unit_command(python: str, k: int, out: Path, workers: int, epochs: int | None, samples: int | None) -> list[str]:
+    cmd = [python, "-m", "RPINN.kaggle_units", "run", "--unit", str(k), "--out", str(out), "--workers", str(workers)]
+    if epochs is not None:
+        cmd += ["--epochs", str(epochs)]
+    if samples is not None:
+        cmd += ["--samples", str(samples)]
+    return cmd
+
+
+def run_unit_isolated(k: int, out: str = "out", workers: int = 4, epochs: int | None = None,
+                      samples: int | None = None, env_dir: str = "/tmp/rpinn-py311") -> dict:
+    """``run_unit`` under Python 3.11 with ``PINS``, built with uv; raises if the unit fails."""
+    src = str(Path(__file__).resolve().parents[1])
+    py = Path(env_dir) / "bin" / "python"
+    if not py.exists():
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "uv"], check=True)
+        subprocess.run([sys.executable, "-m", "uv", "venv", "--python", PYTHON, env_dir], check=True)
+        subprocess.run([sys.executable, "-m", "uv", "pip", "install", "--python", str(py), *PINS], check=True)
+    env = dict(os.environ, PYTHONPATH=src, TF_CPP_MIN_LOG_LEVEL="3")
+    subprocess.run(unit_command(str(py), k, Path(out).resolve(), workers, epochs, samples), env=env, check=True)
+    return json.loads(Path(out, f"machine_unit{k:03d}.json").read_text())
 
 
 def main(argv=None) -> None:
