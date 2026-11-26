@@ -225,3 +225,22 @@ def test_isolated_unit_runs_the_cli_with_the_pinned_environment():
     assert cmd == ["/env/bin/python", "-m", "RPINN.kaggle_units", "run", "--unit", "7", "--out", "/w/out",
                    "--workers", "4", "--samples", "8"]
     assert "tensorflow-cpu==2.15.0" in ku.PINS and "gekko==1.0.6" in ku.PINS and ku.PYTHON == "3.11"
+
+
+def test_campaign_runs_the_units_it_was_sent_and_reports_failures(tmp_path, monkeypatch):
+    ran = []
+
+    def fake(k, *args):
+        ran.append(k)
+        if k == 3:
+            raise OSError("solver crashed")
+
+    monkeypatch.setattr(ku, "run_unit_isolated", fake)
+    monkeypatch.setenv("FORGE_RUN_UNITS", '["1", "3", "5"]')
+    with pytest.raises(RuntimeError):
+        ku.run_campaign_isolated(str(tmp_path))
+    summary = __import__("json").loads((tmp_path / "campaign_summary.json").read_text())
+    assert ran == [1, 3, 5] and summary["done"] == [1, 5] and list(summary["failed"]) == ["3"]
+    monkeypatch.delenv("FORGE_RUN_UNITS")
+    with pytest.raises(SystemExit):
+        ku.run_campaign_isolated(str(tmp_path))

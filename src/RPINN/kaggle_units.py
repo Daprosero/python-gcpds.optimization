@@ -59,7 +59,7 @@ def machine() -> dict:
         pass
     from importlib import metadata
     versions = {}
-    for dist in ("numpy", "tensorflow", "gekko", "pandas"):
+    for dist in ("numpy", "tensorflow", "tensorflow-cpu", "gekko", "pandas"):
         try:
             versions[dist] = metadata.version(dist)
         except metadata.PackageNotFoundError:
@@ -145,6 +145,31 @@ def run_unit_isolated(k: int, out: str = "out", workers: int = 4, epochs: int | 
     env = dict(os.environ, PYTHONPATH=src, TF_CPP_MIN_LOG_LEVEL="3")
     subprocess.run(unit_command(str(py), k, Path(out).resolve(), workers, epochs, samples), env=env, check=True)
     return json.loads(Path(out, f"machine_unit{k:03d}.json").read_text())
+
+
+def run_campaign_isolated(out: str = "out", workers: int = 4, epochs: int | None = None,
+                          samples: int | None = None) -> dict:
+    """Run every unit this session was sent (``FORGE_RUN_UNITS``, a JSON list of unit ids).
+
+    A unit that fails does not stop the others; ``campaign_summary.json`` lists both, and the
+    session fails at the end when any unit failed, so a failure is never read as a result.
+    """
+    ids = [int(u) for u in json.loads(os.environ.get("FORGE_RUN_UNITS") or "[]")]
+    if not ids:
+        raise SystemExit("FORGE_RUN_UNITS names no unit: nothing to run")
+    done, failed = [], {}
+    for k in ids:
+        try:
+            run_unit_isolated(k, out, workers, epochs, samples)
+            done.append(k)
+        except Exception as e:  # recorded, then raised below
+            failed[k] = f"{type(e).__name__}: {e}"[:300]
+    summary = {"units": ids, "done": done, "failed": failed}
+    Path(out).mkdir(parents=True, exist_ok=True)
+    Path(out, "campaign_summary.json").write_text(json.dumps(summary, indent=1))
+    if failed:
+        raise RuntimeError(f"units failed: {failed}")
+    return summary
 
 
 def main(argv=None) -> None:
