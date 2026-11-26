@@ -47,12 +47,13 @@ def machine() -> dict:
                    if l.startswith("model name"))
     except (OSError, StopIteration):
         pass
+    from importlib import metadata
     versions = {}
-    for mod in ("numpy", "tensorflow", "gekko", "pandas"):
+    for dist in ("numpy", "tensorflow", "gekko", "pandas"):
         try:
-            versions[mod] = __import__(mod).__version__
-        except ImportError:
-            versions[mod] = None
+            versions[dist] = metadata.version(dist)
+        except metadata.PackageNotFoundError:
+            versions[dist] = None
     return {"cpu": cpu, "cores": os.cpu_count(), "python": platform.python_version(),
             "platform": platform.platform(), "versions": versions}
 
