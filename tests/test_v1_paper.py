@@ -89,3 +89,27 @@ def test_train_run_writes_weights_history_and_ipopt_inputs(tmp_path):
 
 def test_lr_schedule_divides_by_ten_at_the_paper_epochs():
     assert runs.LR_EPOCHS == (400, 500, 580)
+
+
+# --- IPOPT reference runs (S6) -------------------------------------------------
+from RPINN import ipopt_runs
+
+
+def test_ipopt_solves_the_same_held_out_samples_and_keeps_failures(tmp_path):
+    split = tmp_path / "S" / "split"
+    split.mkdir(parents=True)
+    X = runs.scenario_demands("8", "S", n=3, seed=0)
+    np.save(split / "8_test.npy", X)
+    rec = ipopt_runs.run_network(tmp_path, "S", "8", max_time=5)
+    saved = np.load(tmp_path / "S" / "ipopt" / "8.npz")
+    # Same samples RPINN sees, one row per sample whatever the outcome.
+    assert np.allclose(saved["X"], X) and len(saved["status"]) == 3
+    assert saved["P"].shape == (3, 8) and float(saved["max_time"]) == 5
+    ok = saved["status"] == "ok"
+    assert np.isfinite(saved["objective"][ok]).all() and np.isnan(saved["objective"][~ok]).all()
+
+
+def test_ipopt_failure_is_reported_not_raised():
+    # A one-millisecond cap cannot converge: the sample comes back marked, not as an exception.
+    r = ipopt_runs.solve_sample("8", np.full(8, 5.0), max_time=0.001)
+    assert r["status"] != "ok" and np.isnan(r["objective"]) and r["F"] is None
