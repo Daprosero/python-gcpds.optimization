@@ -1,17 +1,23 @@
 """Uniform mixture model experiment of the RPINN paper (Computers 2024, 13, 176), Section 3.1.
 
-Each repetition draws true mixing coefficients ``pi`` (five values in [0.1, 1] summing to one),
-500 samples ``z_rp ~ U(p-1, p)`` and the target ``y = z @ pi``. White Gaussian noise is added to
-the target at SNR -1, 3 and 5 dB (plus the noise-free case). RPINN trains on the first 400
-samples (30% of them for validation) and is tested on the last 100; IPOPT solves the paper's
-least-squares problem on the same 400 samples. Both are scored against the noise-free target.
+Data are the ones the original code generated in 2024, stored in ``RPINN/Data/Sintéticos``:
+``PIC.npy`` (100 x 5 true mixing coefficients), ``U.npy`` (100 x 500 x 5 inputs) and
+``Y.npy`` (5 noise levels x 100 x 500 targets, SNR -1, 1, 3, 5 dB and noise-free). Those
+inputs do not follow the paper's text (z_rp ~ U(p-1, p) per column): within each repetition
+samples 1-100 have all five inputs in [0, 1), samples 101-200 in [1, 2), and so on, so the
+100 test samples (the last ones) lie in [4, 5). RPINN trains on the first 400 samples (30% of
+them for validation); IPOPT solves the paper's least-squares problem on the same 400 samples.
+Both are scored against the noise-free target.
 
-RPINN (Table tab:arch-mix, 30 parameters): Dense_1 5 SELU without bias (25), Dense_2 1 SELU
-without bias (5) whose kernel holds the l1-based max constraint (entries in [0, 1], l1 norm at
-most 1). The paper reads the mixing coefficients from the output-layer weights (``x_rpinn``);
-since Dense_1 sits before them, the coefficients the net actually applies to z are also saved
-(``x_rpinn_effective``, mean input gradient over the test samples). Loss: lambda_H Huber +
-lambda_L |x^T 1 - 1|; Adam lr 1e-3, 600 epochs, batch 32.
+RPINN follows the original code (``RPINN.model_synthetic_data_.Evaluate.create_custom_model``),
+not the paper's Table tab:arch-mix: one Dense output neuron (ReLU, no bias, 5 parameters)
+applied straight to z, its kernel projected after every step onto the simplex (negative
+entries set to zero, then divided by their sum) and initialised at 1/5. Its weights are the
+mixing coefficients (``x_rpinn``). The table's extra hidden layer (Dense_1, 25 parameters) is
+commented out in that code; with it the output weights are no longer the coefficients. The
+coefficients the net applies to z (``x_rpinn_effective``, mean input gradient over the test
+samples) are kept as a check. Huber loss, Adamax lr 1e-3, 100 epochs, batch 16, as the
+original code; noise levels -1, 1, 3, 5 dB and noise-free, as the original data.
 
 Usage::
 
@@ -34,44 +40,27 @@ P = 5
 N_SAMPLES = 500
 N_TRAIN = 400
 VAL_SPLIT = 0.3
-EPOCHS = 600
-BATCH = 32
+EPOCHS = 100
+BATCH = 16
 LR = 1e-3
-SNRS = (-1, 3, 5, None)
+SNRS = (-1, 1, 3, 5, None)
 REPS = 100
-# lambda_H + lambda_L = 1 (paper Eq. mix-rpinn); the values are not stated in the paper.
-LAMBDA_H, LAMBDA_L = 0.9, 0.1
 
 
-def _rng(seed: int, *parts) -> np.random.Generator:
-    return np.random.default_rng((seed * 1_000_003 + zlib.crc32("/".join(map(str, parts)).encode())) % (2**31 - 1))
+def _data_dir() -> Path:
+    from RPINN.paper_runs import real
+    return Path(real.DATA_DIR) / "Sintéticos"
 
 
-def mixing_coefficients(rng: np.random.Generator, p: int = P) -> np.ndarray:
-    """Values in [0.1, 1] rounded to two decimals that sum to exactly one (original generator)."""
-    while True:
-        x = np.round(rng.uniform(0.1, 1, p), 2)
-        if np.isclose(x.sum(), 1.0, atol=1e-9):
-            return x
+DATA_DIR = _data_dir()
 
 
-def uniform_samples(rng: np.random.Generator, n: int = N_SAMPLES, p: int = P) -> np.ndarray:
-    return np.column_stack([rng.uniform(k - 1, k, n) for k in range(1, p + 1)])
-
-
-def add_noise(y: np.ndarray, snr: float | None, rng: np.random.Generator) -> np.ndarray:
-    """White Gaussian noise at ``snr`` dB relative to the mean signal power (original formula)."""
-    if snr is None:
-        return y.copy()
-    noise_db = 10 * np.log10(abs(np.mean(y))) - snr
-    return y + rng.normal(0.0, np.sqrt(10 ** (noise_db / 10)), y.shape)
-
-
-def make_problem(rep: int, seed: int = 0):
-    rng = _rng(seed, "problem", rep)
-    pi = mixing_coefficients(rng)
-    Z = uniform_samples(rng)
-    return pi, Z, Z @ pi
+def make_problem(rep: int):
+    """The 2024 repetition ``rep``: true coefficients, inputs, noise-free target, targets per SNR."""
+    pi = np.load(DATA_DIR / "PIC.npy")[rep].ravel()
+    Z = np.load(DATA_DIR / "U.npy")[rep]
+    noisy = np.load(DATA_DIR / "Y.npy")[:, rep, :, 0]
+    return pi, Z, noisy[-1], noisy
 
 
 def mape(true, pred) -> float:
@@ -82,26 +71,20 @@ def mape(true, pred) -> float:
 def mixture_model(seed: int = 0):
     import tensorflow as tf
 
-    class L1MaxConstraint(tf.keras.constraints.Constraint):
-        """Entries in [0, 1] and l1 norm at most one."""
+    class SimplexConstraint(tf.keras.constraints.Constraint):
+        """Original CustomConstraint: negative entries to zero, then divided by their sum."""
 
         def __call__(self, w):
-            w = tf.clip_by_value(w, 0.0, 1.0)
-            l1 = tf.reduce_sum(w)
-            return tf.where(l1 > 1.0, w / l1, w)
-
-    def sum_to_one(w):
-        return LAMBDA_L * tf.abs(tf.reduce_sum(w) - 1.0)
+            w = tf.nn.relu(w)
+            return w / tf.reduce_sum(w)
 
     tf.keras.utils.set_random_seed(seed)
     inp = tf.keras.Input(shape=(P,))
-    h = tf.keras.layers.Dense(P, activation="selu", use_bias=False, name="Dense_1")(inp)
-    out = tf.keras.layers.Dense(1, activation="selu", use_bias=False, name="Dense_2",
-                                kernel_constraint=L1MaxConstraint(), kernel_regularizer=sum_to_one,
-                                kernel_initializer=tf.keras.initializers.Constant(1.0 / P))(h)
+    out = tf.keras.layers.Dense(1, activation="relu", use_bias=False, name="Dense_out",
+                                kernel_constraint=SimplexConstraint(),
+                                kernel_initializer=tf.keras.initializers.Constant(1.0 / P))(inp)
     model = tf.keras.Model(inp, out)
-    model.compile(loss=tf.keras.losses.Huber(), loss_weights=[LAMBDA_H],
-                  optimizer=tf.keras.optimizers.Adam(LR))
+    model.compile(loss=tf.keras.losses.Huber(), optimizer=tf.keras.optimizers.Adamax(LR))
     return model
 
 
@@ -114,7 +97,7 @@ def fit_rpinn(Z, y_noisy, seed: int = 0, epochs: int = EPOCHS):
     t0 = time.perf_counter()
     pred = model.predict(Z[N_TRAIN:], verbose=0).ravel()
     pred_s = time.perf_counter() - t0
-    x = model.get_layer("Dense_2").get_weights()[0].ravel()
+    x = model.get_layer("Dense_out").get_weights()[0].ravel()
     return x, effective_coefficients(model, Z[N_TRAIN:]), pred, train_s, pred_s, {k: np.asarray(v) for k, v in hist.history.items()}
 
 
@@ -146,12 +129,12 @@ def solve_ipopt(Z, y):
 
 
 def run_rep(rep: int, out: Path, seed: int = 0, epochs: int = EPOCHS) -> dict:
-    pi, Z, y = make_problem(rep, seed)
+    pi, Z, y, noisy = make_problem(rep)
     rec = {"pi": pi, "Z": Z, "y": y, "snr": np.array([np.nan if s is None else s for s in SNRS], float)}
     rows = {k: [] for k in ("y_noisy", "x_rpinn", "x_rpinn_effective", "x_ipopt", "pred_rpinn", "pred_ipopt",
                             "train_s_rpinn", "pred_s_rpinn", "solve_s_ipopt", "loss", "val_loss")}
-    for snr in SNRS:
-        yn = add_noise(y, snr, _rng(seed, "noise", rep, snr))
+    for j, snr in enumerate(SNRS):
+        yn = noisy[j]
         xr, xe, pr, tr, ps, hist = fit_rpinn(Z, yn, seed=int(zlib.crc32(f"{seed}/{rep}/{snr}".encode()) % 2**31), epochs=epochs)
         xi, ti = solve_ipopt(Z[:N_TRAIN], yn[:N_TRAIN])
         for k, v in (("y_noisy", yn), ("x_rpinn", xr), ("x_rpinn_effective", xe), ("x_ipopt", xi), ("pred_rpinn", pr),

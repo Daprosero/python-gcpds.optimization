@@ -119,42 +119,54 @@ def test_ipopt_failure_is_reported_not_raised():
 from RPINN import mixture_runs as mix
 
 
-def test_mixture_architecture_matches_the_paper_table():
+def test_mixture_architecture_matches_the_original_code():
+    # One output neuron applied straight to z: its weights are the mixing coefficients.
     m = mix.mixture_model(0)
-    assert m.count_params() == 30
-    d1, d2 = m.get_layer("Dense_1"), m.get_layer("Dense_2")
-    assert d1.units == 5 and not d1.use_bias and d1.activation.__name__ == "selu"
-    assert d2.units == 1 and not d2.use_bias and d2.activation.__name__ == "selu"
-    assert type(m.optimizer).__name__ == "Adam" and np.isclose(float(m.optimizer.learning_rate), 1e-3)
+    assert m.count_params() == 5
+    dense = [l for l in m.layers if isinstance(l, tf.keras.layers.Dense)]
+    assert len(dense) == 1
+    out = dense[0]
+    assert out.units == 1 and not out.use_bias and out.activation.__name__ == "relu"
+    assert np.allclose(out.get_weights()[0], 0.2)
+    assert type(m.optimizer).__name__ == "Adamax" and np.isclose(float(m.optimizer.learning_rate), 1e-3)
+    assert mix.EPOCHS == 100 and mix.BATCH == 16 and mix.SNRS == (-1, 1, 3, 5, None)
 
 
-def test_output_weights_keep_the_l1_max_constraint():
+def test_output_weights_are_projected_to_sum_one():
     m = mix.mixture_model(0)
-    c = m.get_layer("Dense_2").kernel_constraint
-    w = c(tf.constant([[2.0], [-1.0], [0.5], [0.5], [0.5]])).numpy().ravel()
-    assert (w >= 0).all() and (w <= 1).all() and w.sum() <= 1 + 1e-6
+    c = m.get_layer("Dense_out").kernel_constraint
+    w = c(tf.constant([[2.0], [-1.0], [0.5], [0.5], [1.0]])).numpy().ravel()
+    assert np.allclose(w, [0.5, 0, 0.125, 0.125, 0.25])
 
 
-def test_mixture_problem_follows_the_paper():
-    pi, Z, y = mix.make_problem(0, seed=0)
-    assert np.isclose(pi.sum(), 1) and (pi >= 0.1).all() and Z.shape == (500, 5)
-    for k in range(5):
-        assert (Z[:, k] >= k).all() and (Z[:, k] <= k + 1).all()
-    assert np.allclose(y, Z @ pi)
+def test_output_weights_recover_the_noise_free_coefficients():
+    pi, Z, y, _ = mix.make_problem(0)
+    x, _, _, _, _, _ = mix.fit_rpinn(Z, y, seed=0)
+    assert np.allclose(x, pi, atol=0.02) and np.isclose(x.sum(), 1, atol=1e-5)
+
+
+def test_mixture_problem_is_the_2024_data():
+    d = mix.DATA_DIR
+    U, Y, PIC = np.load(d / "U.npy"), np.load(d / "Y.npy"), np.load(d / "PIC.npy")
+    pi, Z, y, noisy = mix.make_problem(7)
+    assert np.array_equal(pi, PIC[7].ravel()) and np.array_equal(Z, U[7])
+    assert np.array_equal(y, Y[-1, 7].ravel()) and noisy.shape == (5, 500)
+    assert np.array_equal(noisy[0], Y[0, 7].ravel()) and np.array_equal(noisy[-1], y)
 
 
 def test_ipopt_recovers_the_noise_free_coefficients():
-    pi, Z, y = mix.make_problem(1, seed=0)
+    pi, Z, y, _ = mix.make_problem(1)
     x, _ = mix.solve_ipopt(Z[:400], y[:400])
     assert np.allclose(x, pi, atol=1e-3) and np.isclose(x.sum(), 1, atol=1e-6)
 
 
 def test_one_repetition_writes_every_snr(tmp_path):
     rec = mix.run_rep(0, tmp_path, seed=0, epochs=2)
+    assert np.array_equal(rec["y_noisy"], mix.make_problem(0)[3])
     saved = np.load(tmp_path / "Sinteticos" / "mixture_rep000.npz")
-    assert saved["x_rpinn"].shape == (4, 5) and saved["pred_rpinn"].shape == (4, 100)
-    assert saved["x_rpinn_effective"].shape == (4, 5)
-    assert np.isnan(saved["snr"][-1]) and list(saved["snr"][:3]) == [-1, 3, 5]
+    assert saved["x_rpinn"].shape == (5, 5) and saved["pred_rpinn"].shape == (5, 100)
+    assert saved["x_rpinn_effective"].shape == (5, 5)
+    assert np.isnan(saved["snr"][-1]) and list(saved["snr"][:4]) == [-1, 1, 3, 5]
 
 
 def test_effective_coefficients_of_a_linear_net_are_its_weights():
