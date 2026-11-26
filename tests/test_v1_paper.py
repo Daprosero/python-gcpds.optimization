@@ -244,3 +244,20 @@ def test_campaign_runs_the_units_it_was_sent_and_reports_failures(tmp_path, monk
     monkeypatch.delenv("FORGE_RUN_UNITS")
     with pytest.raises(SystemExit):
         ku.run_campaign_isolated(str(tmp_path))
+
+
+# --- Paper figures and tables ------------------------------------------------------
+from RPINN import paper_figures as pf
+
+
+def test_mape_is_a_percentage_against_the_reference_and_skips_zero_references():
+    assert np.isclose(pf.mape([2.0, 4.0], [1.0, 5.0]), 37.5)
+    assert np.isclose(pf.mape([0.0, 4.0], [9.0, 5.0]), 25.0)
+
+
+def test_gas_metrics_score_a_converged_ipopt_solution_as_feasible():
+    ip = pf.ipopt(pf.RUN, "S", "8")
+    ok = ip["status"] == "ok"
+    m = pf.gas_metrics("8", ip["X"][ok], ip["F"][ok], ip["P"][ok])
+    assert np.nanmedian(m["balance"]) < 1e-4 and np.all(m["ratio"] == 0)
+    assert np.allclose(m["cost"], ip["F"][ok] @ pf.network("8")["cost"])

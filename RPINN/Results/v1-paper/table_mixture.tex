@@ -1,0 +1,22 @@
+\begin{tabular}{llrrr}
+\toprule
+ &  & output_mape & weights_mape & seconds \\
+snr & method &  &  &  \\
+\midrule
+\multirow[t]{2}{*}{-1 dB} & RPINN & 0.913 & 34.862 & 10.842 \\
+ & IPOPT & 2.032 & 82.687 & 0.060 \\
+\cline{1-5}
+\multirow[t]{2}{*}{1 dB} & RPINN & 0.850 & 33.244 & 9.486 \\
+ & IPOPT & 1.877 & 76.553 & 0.061 \\
+\cline{1-5}
+\multirow[t]{2}{*}{3 dB} & RPINN & 0.855 & 34.249 & 9.309 \\
+ & IPOPT & 1.540 & 64.738 & 0.061 \\
+\cline{1-5}
+\multirow[t]{2}{*}{5 dB} & RPINN & 0.850 & 32.229 & 9.416 \\
+ & IPOPT & 1.281 & 53.873 & 0.061 \\
+\cline{1-5}
+\multirow[t]{2}{*}{noise-free} & RPINN & 0.001 & 0.064 & 9.255 \\
+ & IPOPT & 0.000 & 0.000 & 0.060 \\
+\cline{1-5}
+\bottomrule
+\end{tabular}
