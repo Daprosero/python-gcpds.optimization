@@ -77,6 +77,8 @@ def run_mixture(u: dict, out: Path, workers: int, reps: int | None) -> dict:
     stop = u["stop"] if reps is None else min(u["stop"], u["first"] + reps)
     env = dict(os.environ, OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1", TF_NUM_INTRAOP_THREADS="1",
                TF_NUM_INTEROP_THREADS="1", TF_CPP_MIN_LOG_LEVEL="3")
+    src = str(Path(__file__).resolve().parents[1])  # a runner may put src on sys.path only, not in the env
+    env["PYTHONPATH"] = src + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     log = Path(out) / "Sinteticos" / f"mixture_{u['first']:03d}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
 
