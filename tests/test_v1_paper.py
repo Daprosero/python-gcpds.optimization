@@ -113,3 +113,51 @@ def test_ipopt_failure_is_reported_not_raised():
     # A one-millisecond cap cannot converge: the sample comes back marked, not as an exception.
     r = ipopt_runs.solve_sample("8", np.full(8, 5.0), max_time=0.001)
     assert r["status"] != "ok" and np.isnan(r["objective"]) and r["F"] is None
+
+
+# --- Uniform mixture model (S7) --------------------------------------------------
+from RPINN import mixture_runs as mix
+
+
+def test_mixture_architecture_matches_the_paper_table():
+    m = mix.mixture_model(0)
+    assert m.count_params() == 30
+    d1, d2 = m.get_layer("Dense_1"), m.get_layer("Dense_2")
+    assert d1.units == 5 and not d1.use_bias and d1.activation.__name__ == "selu"
+    assert d2.units == 1 and not d2.use_bias and d2.activation.__name__ == "selu"
+    assert type(m.optimizer).__name__ == "Adam" and np.isclose(float(m.optimizer.learning_rate), 1e-3)
+
+
+def test_output_weights_keep_the_l1_max_constraint():
+    m = mix.mixture_model(0)
+    c = m.get_layer("Dense_2").kernel_constraint
+    w = c(tf.constant([[2.0], [-1.0], [0.5], [0.5], [0.5]])).numpy().ravel()
+    assert (w >= 0).all() and (w <= 1).all() and w.sum() <= 1 + 1e-6
+
+
+def test_mixture_problem_follows_the_paper():
+    pi, Z, y = mix.make_problem(0, seed=0)
+    assert np.isclose(pi.sum(), 1) and (pi >= 0.1).all() and Z.shape == (500, 5)
+    for k in range(5):
+        assert (Z[:, k] >= k).all() and (Z[:, k] <= k + 1).all()
+    assert np.allclose(y, Z @ pi)
+
+
+def test_ipopt_recovers_the_noise_free_coefficients():
+    pi, Z, y = mix.make_problem(1, seed=0)
+    x, _ = mix.solve_ipopt(Z[:400], y[:400])
+    assert np.allclose(x, pi, atol=1e-3) and np.isclose(x.sum(), 1, atol=1e-6)
+
+
+def test_one_repetition_writes_every_snr(tmp_path):
+    rec = mix.run_rep(0, tmp_path, seed=0, epochs=2)
+    saved = np.load(tmp_path / "Sinteticos" / "mixture_rep000.npz")
+    assert saved["x_rpinn"].shape == (4, 5) and saved["pred_rpinn"].shape == (4, 100)
+    assert saved["x_rpinn_effective"].shape == (4, 5)
+    assert np.isnan(saved["snr"][-1]) and list(saved["snr"][:3]) == [-1, 3, 5]
+
+
+def test_effective_coefficients_of_a_linear_net_are_its_weights():
+    inp = tf.keras.Input(shape=(5,))
+    lin = tf.keras.Model(inp, tf.keras.layers.Dense(1, use_bias=False, kernel_initializer=tf.keras.initializers.Constant(0.2))(inp))
+    assert np.allclose(mix.effective_coefficients(lin, np.random.rand(10, 5)), 0.2)
