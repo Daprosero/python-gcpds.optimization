@@ -77,6 +77,20 @@ def split_paper(X: np.ndarray, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
     return X[idx[:cut]], X[idx[cut:]]
 
 
+def held_out_split(net: str, tip: str, n: int = N_SAMPLES, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    """Training and held-out demands of one network and scenario, the same on every machine."""
+    X = scenario_demands(net, tip, n=n, seed=seed)
+    return split_paper(X, seed=_seed(seed, net, tip))
+
+
+def write_split(net: str, tip: str, out: Path, n: int = N_SAMPLES, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    X_train, X_test = held_out_split(net, tip, n=n, seed=seed)
+    split_dir = Path(out) / tip / "split"
+    split_dir.mkdir(parents=True, exist_ok=True)
+    np.save(split_dir / f"{net}_test.npy", X_test)
+    return X_train, X_test
+
+
 class _EpochClock(tf.keras.callbacks.Callback):
     def __init__(self):
         super().__init__()
@@ -93,11 +107,7 @@ def run_one(net: str, tip: str, s: int, out: Path, n: int = N_SAMPLES, epochs: i
             seed: int = 0, verbose: int = 0) -> dict:
     """Train one model variant on one network and scenario and write its files under ``out``."""
     out = Path(out)
-    X = scenario_demands(net, tip, n=n, seed=seed)
-    X_train, X_test = split_paper(X, seed=_seed(seed, net, tip))
-    split_dir = out / tip / "split"
-    split_dir.mkdir(parents=True, exist_ok=True)
-    np.save(split_dir / f"{net}_test.npy", X_test)
+    X_train, _ = write_split(net, tip, out, n=n, seed=seed)
 
     fd = X_train.max(axis=0)
     model = real.flow_model(str(net_path(net)), fd, s=s, seed=_seed(seed, "model", net, tip, str(s)))

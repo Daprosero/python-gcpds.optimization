@@ -173,3 +173,48 @@ def test_effective_coefficients_of_a_linear_net_are_its_weights():
     inp = tf.keras.Input(shape=(5,))
     lin = tf.keras.Model(inp, tf.keras.layers.Dense(1, use_bias=False, kernel_initializer=tf.keras.initializers.Constant(0.2))(inp))
     assert np.allclose(mix.effective_coefficients(lin, np.random.rand(10, 5)), 0.2)
+
+
+# --- Remote campaign units ---------------------------------------------------------
+from RPINN import kaggle_units as ku
+
+
+def test_units_cover_every_network_sample_and_repetition_once():
+    us = ku.units()
+    assert len(us) == 110 and [u["unit"] for u in us] == list(range(110))
+    gas = [u for u in us if u["kind"] == "gas"]
+    for tip in runs.TIPS:
+        for net in runs.NETS:
+            parts = sorted((u["start"], u["stop"]) for u in gas if u["tip"] == tip and u["net"] == net)
+            assert parts == [(0, 80), (80, 160), (160, 240), (240, 320)]
+    reps = [r for u in us if u["kind"] == "mixture" for r in range(u["first"], u["stop"])]
+    assert reps == list(range(100))
+
+
+def test_split_helper_writes_what_training_writes(tmp_path):
+    runs.run_one("8", "S", s=0, out=tmp_path / "a", n=400, epochs=1, seed=0)
+    runs.write_split("8", "S", tmp_path / "b", n=400, seed=0)
+    a, b = (np.load(tmp_path / d / "S" / "split" / "8_test.npy") for d in ("a", "b"))
+    assert a.tobytes() == b.tobytes()
+
+
+def test_ipopt_parts_merge_into_the_whole_run(tmp_path):
+    split = tmp_path / "S" / "split"
+    split.mkdir(parents=True)
+    np.save(split / "8_test.npy", runs.scenario_demands("8", "S", n=4, seed=0))
+    whole = ipopt_runs.run_network(tmp_path, "S", "8", max_time=5, limit=4)
+    for k, (a, b) in enumerate(((2, 4), (0, 2))):
+        ipopt_runs.run_network(tmp_path, "S", "8", max_time=5, start=a, limit=b, part=k)
+    merged = ipopt_runs.merge_parts(tmp_path, "S", "8")
+    assert np.array_equal(merged["X"], whole["X"]) and list(merged["status"]) == list(whole["status"])
+    assert np.allclose(merged["objective"], whole["objective"], equal_nan=True)
+
+
+def test_gas_unit_smoke_writes_models_ipopt_part_and_machine(tmp_path):
+    info = ku.run_unit(0, tmp_path, workers=1, epochs=1, samples=2)
+    assert info["unit"]["tip"] == "S" and info["unit"]["net"] == "8" and info["unit"]["part"] == 0
+    assert (tmp_path / "S" / "Modelo1" / "model1_8.h5").exists() and (tmp_path / "S" / "Modelo2" / "model2_8.h5").exists()
+    part = np.load(tmp_path / "S" / "ipopt" / "8_part0.npz")
+    assert len(part["status"]) == 2 and int(part["start"]) == 0
+    m = __import__("json").loads((tmp_path / "machine_unit000.json").read_text())
+    assert m["machine"]["cores"] >= 1 and m["result"]["ipopt_samples"] == 2
