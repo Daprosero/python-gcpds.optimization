@@ -1,6 +1,7 @@
 """Portability smoke: the paper code runs from a plain clone on any OS.
 
-Rebuilds the gas-network RPINN of the article with its published weights and
+Rebuilds the gas-network RPINN of the article with the weights of the paper campaign
+(RPINN/Data/v1-paper-run) and
 writes a numeric fingerprint to RPINN/Results/portability/<platform>.json, so
 runs on different operating systems can be compared value by value.
 """
@@ -37,9 +38,10 @@ def test_synthetic_inputs_load():
 def test_gas_model_reproduces_with_paper_weights(s, weights):
     rng = np.random.default_rng(1)
     x_test = rng.uniform(0.0, 20.0, size=(64, 8)).astype("float32")
-    fd = x_test.max(axis=0)
+    folder = real.RUN_DIR / "M" / Path(weights).parent  # the paper campaign's models (v1-paper-run)
+    fd = np.load(folder / "fd_8.npy")
     model = real.flow_model(str(real.DATA_DIR / "Redes" / "ng_case8.xlsx"), fd, s=s)
-    model.load_weights(str(real.DATA_DIR / "M" / weights))
+    model.load_weights(str(real.RUN_DIR / "M" / weights))
     flows = tf.keras.Model(model.inputs, model.get_layer("F").output).predict(x_test, verbose=False)
     pressures = tf.keras.Model(model.inputs, model.get_layer("P").output).predict(x_test, verbose=False)
     assert np.isfinite(flows).all() and np.isfinite(pressures).all()

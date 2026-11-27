@@ -289,3 +289,43 @@ def test_timing_command_runs_the_cli_under_the_pinned_python():
     assert tr.timing_command("/env/bin/python", 4, "/w/out", 20, 4) == [
         "/env/bin/python", "-m", "RPINN.timing_runs", "run", "--unit", "4", "--out", "/w/out",
         "--ipopt", "20", "--workers", "4"]
+
+
+# --- the original figure notebook (Generator_plot.ipynb) reads the paper campaign -------------
+def test_notebook_gas_frames_score_both_methods_on_the_samples_ipopt_solved():
+    from RPINN import model_real_data_ as real
+    from RPINN import paper_figures as pf
+    B, W, R, C = real.ng_case_evaluate(tip1="S", s=1, plotb=False)
+    assert list(B.columns[:2]) == ["IPOPT(8)", "RPINN(8)"] and B.columns[-1] == "RPINN(Col_18)"
+    ip = pf.ipopt(pf.RUN, "S", "8")
+    ok = ip["status"] == "ok"
+    assert B["IPOPT(8)"].notna().sum() == ok.sum() == B["RPINN(8)"].notna().sum()
+    rp = pf.rpinn(pf.RUN, "S", "8", 1)
+    want = pf.gas_metrics("8", rp["X"][ok], rp["F"][ok], rp["P"][ok])
+    np.testing.assert_allclose(B["RPINN(8)"].dropna(), want["balance"])
+    np.testing.assert_allclose(C["IPOPT(8)"].dropna(), pf.gas_metrics("8", ip["X"][ok], ip["F"][ok], ip["P"][ok])["cost"])
+
+
+def test_notebook_mixture_errors_equal_the_paper_table():
+    import pandas as pd
+    from RPINN import model_synthetic_data_ as synth
+    from RPINN import paper_figures as pf
+    y, w = synth.Evaluate().campaign_mape()
+    assert len(y) == 100
+    table = pd.read_csv(pf.OUT / "table_mixture.csv").set_index(["snr", "method"])
+    for level, tag in zip(pf.SNR_LABELS, ("-1", "1", "3", "5", "N")):
+        for method in ("RPINN", "IPOPT"):
+            assert np.isclose(w[f"{method}({tag})"].median(), table.loc[(level, method), "weights_mape"])
+            assert np.isclose(y[f"{method}({tag})"].median(), table.loc[(level, method), "output_mape"])
+
+
+def test_notebook_time_frames_read_the_same_session_timing(tmp_path, monkeypatch):
+    import json
+    from RPINN import model_real_data_ as real
+    monkeypatch.setattr(real, "OUTPUT_DIR", tmp_path)
+    t = real.plot_time("predict", s=1, tip="M", plotb=False)
+    rec = json.loads((real.RUN_DIR / "timing" / "M_8.json").read_text())
+    assert t["RPINN(8)"].dropna().tolist() == rec["predict_seconds"]
+    assert t["IPOPT(8)"].dropna().tolist() == rec["ipopt_wall_seconds"]
+    f = real.plot_time("fit", s=1, tip="M", plotb=False)
+    assert f["RPINN(Col_18)"].notna().sum() == 600

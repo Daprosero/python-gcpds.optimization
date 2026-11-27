@@ -55,6 +55,54 @@ def _default_data_dir() -> Path:
 
 DATA_DIR = _default_data_dir()
 OUTPUT_DIR = Path(os.environ.get("RPINN_OUTPUT_DIR", "."))
+# The paper campaign (RPINN.kaggle_units): trained models, held-out inputs, IPOPT solutions, times.
+RUN_DIR = DATA_DIR / "v1-paper-run"
+NET_IDS = ['8', '9', '10', '11', '12', '13', '14', '15', 'Col']
+
+
+def net_label(net):
+    """Column label of a network in the result frames: its node count, 'Col_18' for Colombia."""
+    return 'Col_18' if net == 'Col' else str(net)
+
+
+def net_path_of(net):
+    """The network file of ``net`` (RPINN/Data/Redes), the one the campaign trained and solved."""
+    from RPINN.paper_runs import net_path
+    return net_path(net)
+
+
+def campaign_case(tip, net, s=1, run=None):
+    """RPINN predictions and IPOPT solutions of one scenario and network of the paper campaign.
+
+    Returns ``X`` (the 320 held-out demands), ``F``/``P`` (RPINN flows and pressures, model
+    ``Modelo{s+1}``), ``ipopt`` (the IPOPT npz: X, F, P, status, wall_seconds, ...) and ``ok``
+    (the samples IPOPT solved).
+    """
+    from RPINN import paper_figures as pf
+    run = Path(run or RUN_DIR)
+    rp, ip = pf.rpinn(run, tip, net, s), pf.ipopt(run, tip, net)
+    return {"X": rp["X"], "F": rp["F"], "P": rp["P"], "ipopt": ip, "ok": ip["status"] == "ok"}
+
+
+def case_metrics(net, X, F, P, tip2='MAPE'):
+    """Node balance, Weymouth, compression ratio and cost per sample, the paper's formulas.
+
+    ``tip2='MAPE'`` gives percent errors (RPINN.paper_figures.gas_metrics); ``'MAE'`` gives the
+    mean absolute errors of the same quantities. The ratio is the share (%) of compressors whose
+    outlet/inlet pressure ratio leaves [1, beta_max]; the cost is ``F @ c``.
+    """
+    from RPINN import paper_figures as pf
+    if tip2 == 'MAPE':
+        return pf.gas_metrics(net, X, F, P)
+    n = pf.network(net)
+    X, F, P = (np.asarray(a, float) for a in (X, F, P))
+    pi, pj = P[:, n["i"]], P[:, n["j"]]
+    wey_flow = np.sign(pi**2 - pj**2) * np.sqrt(n["K"] * np.abs(pi**2 - pj**2))
+    ratio = np.round(P[:, n["jc"]] / P[:, n["ic"]], 3)
+    return {"balance": np.abs(X - F @ n["w"].T).mean(axis=1),
+            "weymouth": np.abs(wey_flow - F[:, n["nW"]:n["nW"] + n["nT"]]).mean(axis=1),
+            "ratio": ((ratio < 1.0) | (ratio > n["beta"])).mean(axis=1) * 100,
+            "cost": F @ n["cost"][:F.shape[1]]}
 # Definir las librerías que necesitas instalar
 libraries = [
     "cvxpy[CLARABEL,CBC,CVXOPT,GLOP,GLPK,GUROBI,MOSEK,PDLP,SCIP,XPRESS]"
@@ -83,8 +131,8 @@ def plot_time_p():
     axs[1].set_yscale('log')
     # Configurar las etiquetas de los ejes y su tamaño de fuente
     # Ajusta aquí el tamaño para los tick labels del eje X
-    axs[1].set_ylim([1e-3,2e1])
-    axs[0].set_ylim([1e-3,2e1])
+    axs[1].set_ylim([1e-4,2e2])  # 2024: [1e-3, 2e1]; IPOPT now stops at its 60 s cap
+    axs[0].set_ylim([1e-4,2e2])
     axs[0].tick_params(axis='x', labelsize=20,rotation=90)
     axs[0].tick_params(axis='y', labelsize=20)
 
@@ -829,39 +877,40 @@ def plots(Balance, Wey, re, Costos, s,name='RGAS',selec='All'):
         # Configurando el violinplot para Balance
         sns.violinplot(data=Balance, inner='box', cut=0, palette=colors, ax=axs[0, 0] )
         axs[0, 0].set_yscale('log')
-        axs[0, 0].set_ylabel('MAPE', fontsize=fontsize)
+        axs[0, 0].set_ylabel('MAPE [%]', fontsize=fontsize)
         #axs[0, 0].set_xlabel('Network dimension', fontsize=fontsize)
         axs[0, 0].tick_params(axis='x', labelsize=fontsize, rotation=rotation_angle)
         axs[0, 0].tick_params(axis='y', labelsize=fontsize)
-        axs[0, 0].set_ylim(1e-9, 1e2)
+        axs[0, 0].set_ylim(1e-10, 1e5)
         axs[0, 0].grid(True)
         
 
         # Configurando el violinplot para Wey
         sns.violinplot(data=Wey, inner='box', cut=0, palette=colors,ax=axs[0, 1])
         axs[0, 1].set_yscale('log')
-        axs[0, 1].set_ylabel('MAPE', fontsize=fontsize)
+        axs[0, 1].set_ylabel('MAPE [%]', fontsize=fontsize)
         #axs[0, 1].set_xlabel('Network dimension', fontsize=fontsize)
         axs[0, 1].tick_params(axis='x', labelsize=fontsize, rotation=rotation_angle)
         axs[0, 1].tick_params(axis='y', labelsize=fontsize)
-        axs[0, 1].set_ylim(1e-9, 1e2)
+        axs[0, 1].set_ylim(1e-10, 1e5)
         axs[0, 1].grid(True)
         # Configurando el violinplot para re
         sns.violinplot(data=re, inner='box', cut=0, palette=colors, ax=axs[1, 0])
-        axs[1, 0].set_ylabel('MAPE', fontsize=fontsize)
+        axs[1, 0].set_ylabel('Compressors out of range [%]', fontsize=fontsize)
         #axs[1, 0].set_xlabel('Network dimension', fontsize=fontsize)
         axs[1, 0].tick_params(axis='x', labelsize=fontsize, rotation=rotation_angle)
         axs[1, 0].tick_params(axis='y', labelsize=fontsize)
         axs[1, 0].grid(True)
 
-        # Configurando el violinplot para Costos
-        sns.violinplot(data=Costos, inner='box', cut=0, palette=colors, ax=axs[1, 1])
-        axs[1, 1].set_yscale('symlog')
+        # Configurando el violinplot para Costos: RPINN - IPOPT on the samples IPOPT solved
+        diff = pd.DataFrame(Costos.iloc[:, 1::2].values - Costos.iloc[:, 0::2].values,
+                            columns=Costos.columns[1::2])
+        sns.violinplot(data=diff, inner='box', cut=0, color='lightgreen', ax=axs[1, 1])
+        axs[1, 1].set_yscale('symlog', linthresh=1e4)
         axs[1, 1].set_ylabel('Cost difference', fontsize=fontsize)
         #axs[1, 1].set_xlabel('Network dimension', fontsize=fontsize)
         axs[1, 1].tick_params(axis='x', labelsize=fontsize, rotation=rotation_angle)
         axs[1, 1].tick_params(axis='y', labelsize=fontsize)
-        axs[1, 1].set_ylim(1e4, 1e9)
         axs[1, 1].grid(True)
 
         # Ajuste de la disposición de la gráfica y establecimiento del título principal basado en la variable 's'
@@ -881,11 +930,11 @@ def plots(Balance, Wey, re, Costos, s,name='RGAS',selec='All'):
         # Configurando el violinplot para Wey
         sns.violinplot(data=Wey, inner='box', cut=0, palette=colors,ax=axs[0])
         axs[0].set_yscale('log')
-        axs[0].set_ylabel('MAPE', fontsize=fontsize)
+        axs[0].set_ylabel('MAPE [%]', fontsize=fontsize)
         #axs[0, 1].set_xlabel('Network dimension', fontsize=fontsize)
         axs[0].tick_params(axis='x', labelsize=fontsize, rotation=rotation_angle)
         axs[0].tick_params(axis='y', labelsize=fontsize)
-        axs[0].set_ylim(1e-9, 1e2)
+        axs[0].set_ylim(1e-10, 1e5)
         axs[0].grid(True)
         # Configurando el violinplot para Costos
         sns.violinplot(data=Costos, inner='box', cut=0, palette=colors, ax=axs[1])
@@ -1057,62 +1106,31 @@ def extract_data(times, b):
     # Using a list comprehension for concise extraction
     return [times[b, :][i][0][0] for i in range(320)]
 
-def plot_time(b='fit', s1=f'{DATA_DIR}/Redes/', s2=f'{DATA_DIR}/', s=1,tip='M',plotb=True):
+def plot_time(b='fit', s1=None, s2=None, s=1,tip='M',plotb=True):
     """
-    Generates and displays boxplot visualizations for time measurements of different network models.
+    Violin plots of RPINN and IPOPT times per network, from the paper campaign.
 
     Parameters:
-    - b (str): Indicates the type of operation to perform, 'fit' for fitting or 'predict' for prediction.
-    - s1 (str): Base path for the file location.
-    - s2 (str): Secondary path for data and model files.
-    - s (int): Mode indicator for selecting model paths.
-
-    The function first determines the file paths for the Excel and model files based on the mode 's'.
-    It then loads the test data and times data. If 'b' is 'predict', it iterates over models, performs
-    predictions, measures the time taken for predictions, and stores these times in a DataFrame.
-    This DataFrame is then used to create boxplot visualizations. If 'b' is not 'predict', it loads
-    time measurements from a CSV file and creates boxplots for these measurements.
-
-    The boxplots provide a comparison of time taken by different network models for predictions or fitting.
+    - b (str): 'fit' compares RPINN training (seconds per epoch, 600 epochs, from
+      ``Modelo{s+1}/record_{net}.json``) with the IPOPT solves of the same session (the 80
+      samples of the unit that trained the model). 'predict' compares the RPINN prediction of
+      one sample (320 held-out samples, batch 1) with IPOPT solves (20 samples), both measured
+      in one session (``timing/{tip}_{net}.json``, RPINN.timing_runs).
+    - s1 (str): Campaign folder (default ``RUN_DIR``). s2 is kept for compatibility and unused.
+    - s (int): 0 for Modelo1, 1 for Modelo2.
+    - tip (str): Scenario S, M or D.
     """
-
-    s1_path = Path(s1)
-    s2_path = Path(s2)
-
-    filepath = ['ng_case8.xlsx', 'ng_case9.xlsx', 'ng_case10.xlsx', 'ng_case11.xlsx',
-                'ng_case12.xlsx', 'ng_case13.xlsx', 'ng_case14.xlsx', 'ng_case15.xlsx', 'ng_caseCol_18.xlsx']
-    if s == 0:
-        modelNum='Modelo1'
-        modelpath = ['model1_8.h5', 'model1_9.h5', 'model1_10.h5', 'model1_11.h5',
-                     'model1_12.h5', 'model1_13.h5', 'model1_14.h5', 'model1_15.h5', 'model1_Col.h5']
-    elif s == 1:
-        modelNum='Modelo2'
-        modelpath = ['model2_8.h5', 'model2_9.h5', 'model2_10.h5', 'model2_11.h5',
-                     'model2_12.h5', 'model2_13.h5', 'model2_14.h5', 'model2_15.h5', 'model2_Col.h5']
-
-    X_test = load_data(s2_path /tip/'MAE'/'inputs_P.mat', 'inputs')
-    times = np.array(sio.loadmat(s2_path /'Registro'/ 'times_P.mat')['times'])
+    import json
+    run = Path(s1 or RUN_DIR)
     fontsize = 20
     rotation_angle = 45
     if b == 'predict':
-        Times_p = pd.DataFrame()
-        for im in range(9):
-            path = s1_path / filepath[im]
-            fd = np.array(X_test[im]).max(axis=0)
-            model2 = flow_model(str(path), fd, s=s)
-            model2.load_weights(s2_path / tip/modelNum/modelpath[im])
-
-            time_callback = TimeHistoryTest()
-            predictions = model2.predict(np.array(X_test[im])[0:320], batch_size=1, callbacks=[
-                                         time_callback], verbose=False)
-            if im == 8:
-                Times_p['IPOPT(Col_18)'] = extract_data(times, im)
-                Times_p['RPINN(Col_18)'] = time_callback.prediction_times
-                
-            else:
-                Times_p['IPOPT(' + str(im + 8) + ')'] = extract_data(times, im)
-                Times_p['RPINN(' + str(im + 8)
-                        + ')'] = time_callback.prediction_times
+        cols = {}
+        for net in NET_IDS:
+            rec = json.loads((run / 'timing' / f'{tip}_{net}.json').read_text())
+            cols['IPOPT(' + net_label(net) + ')'] = pd.Series(rec['ipopt_wall_seconds'])
+            cols['RPINN(' + net_label(net) + ')'] = pd.Series(rec['predict_seconds' if s == 1 else 'predict_seconds_s0'])
+        Times_p = pd.DataFrame(cols)
         if plotb:
             plt.figure(figsize=(20, 20))
             colors = ['skyblue' if i % 2 == 0 else 'lightgreen' for i in range(len(Times_p.columns))]
@@ -1133,16 +1151,13 @@ def plot_time(b='fit', s1=f'{DATA_DIR}/Redes/', s2=f'{DATA_DIR}/', s=1,tip='M',p
         else:
             return Times_p
     else:
-        N = 15920
-        timesr = pd.read_csv(s2_path / 'Registro'/ 'Time.csv').values
-        im = pd.DataFrame()
-        for i in range(9):
-            if i == 8:
-                im['RPINN(Col_18)'] = timesr[:, i]
-                im['IPOPT(Col_18)'] = extract_data(times, i)
-            else:
-                im['RPINN(' + str(i + 8) + ')'] = timesr[:, i]
-                im['IPOPT(' + str(i + 8) + ')'] = extract_data(times, i)
+        cols = {}
+        for net in NET_IDS:
+            rec = json.loads((run / tip / f'Modelo{s + 1}' / f'record_{net}.json').read_text())
+            ip = np.load(run / tip / 'ipopt' / f'{net}_part0.npz')
+            cols['RPINN(' + net_label(net) + ')'] = pd.Series(rec['epoch_seconds'])
+            cols['IPOPT(' + net_label(net) + ')'] = pd.Series(ip['wall_seconds'])
+        im = pd.DataFrame(cols)
         if plotb:
             plt.figure(figsize=(20, 20))
             colors = ['skyblue' if i % 2 == 0 else 'lightgreen' for i in range(len(im.columns))]
@@ -1162,118 +1177,35 @@ def plot_time(b='fit', s1=f'{DATA_DIR}/Redes/', s2=f'{DATA_DIR}/', s=1,tip='M',p
             return im
         else:
             return im
-def ng_case_evaluate(s1=f'{DATA_DIR}/',tip1='M',tip2='MAPE', s=1,plotb=True,selec='All'):
+def ng_case_evaluate(s1=None,tip1='M',tip2='MAPE', s=1,plotb=True,selec='All'):
     """
-    Evaluates multiple gas network cases using pre-trained models and generates evaluation metrics.
+    Constraint compliance and cost of RPINN and IPOPT on every network of one scenario.
 
     Parameters:
-    - s1 (str): Base directory path where the network case files are stored.
-    - s2 (str): Directory path where input and output data files, and model files are stored.
-    - s (int): Mode indicator (0 or 1) to choose between two sets of model paths.
+    - s1 (str): Campaign folder (default ``RUN_DIR``, the paper campaign).
+    - tip1 (str): Scenario S, M or D.
+    - tip2 (str): 'MAPE' (percent errors) or 'MAE' (absolute errors).
+    - s (int): 0 for Modelo1, 1 for Modelo2.
 
-    This function performs the following steps:
-    - Loads test input and output data.
-    - Based on the mode 's', selects a set of model paths.
-    - Iterates over multiple network cases, loading the necessary data for each case.
-    - For each case, it loads a pre-trained model and performs predictions.
-    - Computes evaluation metrics such as Weymouth, Balance, Cost, and Pressure Ratios (Pj/Pi).
-    - Aggregates the results into DataFrames for each metric.
-    - Finally, calls the `plots` function to visualize the results.
+    Both methods are scored with the same formulas (``case_metrics``) on the held-out samples
+    IPOPT solved; samples IPOPT did not solve are in ``ng_evaluate_atip``.
 
-    Returns a tuple of DataFrames: (Balance, Weymouth, Pj/Pi, Cost)
+    Returns a tuple of DataFrames: (Balance, Weymouth, Pj/Pi, Cost), columns ``IPOPT(n)``/``RPINN(n)``.
     """
-    s1_path = Path(s1) 
-    #s2_path = Path(s1)
-    #s3_path = Path(s1)
-
-    X_test = load_data(s1_path / tip1/tip2 /'inputs_P.mat', 'inputs')
-    #y_test = load_data(s2_path / 'outputs_P.mat', 'outputs')
-
-    if s == 0:
-        modelpath = ['model1_8.h5', 'model1_9.h5', 'model1_10.h5', 'model1_11.h5',
-                     'model1_12.h5', 'model1_13.h5', 'model1_14.h5', 'model1_15.h5', 'model1_Col.h5']
-    elif s == 1:
-        modelpath = ['model2_8.h5', 'model2_9.h5', 'model2_10.h5', 'model2_11.h5',
-                     'model2_12.h5', 'model2_13.h5', 'model2_14.h5', 'model2_15.h5', 'model2_Col.h5']
-    filepath = ['ng_case8.xlsx', 'ng_case9.xlsx', 'ng_case10.xlsx', 'ng_case11.xlsx',
-                'ng_case12.xlsx', 'ng_case13.xlsx', 'ng_case14.xlsx', 'ng_case15.xlsx', 'ng_caseCol_18.xlsx']
     Weymouth = pd.DataFrame()
     Balance = pd.DataFrame()
     Costos = pd.DataFrame()
     PjPi = pd.DataFrame()
-        
-    Bals=sio.loadmat(s1_path / tip1/tip2 /'Bal_P.mat')['inputs'][0]
-    Weys=sio.loadmat(s1_path / tip1/tip2 /'Wey_P.mat')['inputs'][0]
-    Coms=sio.loadmat(s1_path / tip1/tip2 /'Com_P.mat')['inputs'][0]
-    Co=sio.loadmat(s1_path / tip1/tip2 /'Cost_P.mat')['inputs'][0]
-    for im in range(9):
-        path = s1_path / 'Redes' / filepath[im]
-        Data_inf = pd.read_excel(path, sheet_name='node.info')
-        Data_D = pd.read_excel(path, sheet_name='node.dem')
-        Data_Dc = pd.read_excel(path, sheet_name='node.demcost')
-        Data_W = pd.read_excel(path, sheet_name='well')
-        Data_T = pd.read_excel(path, sheet_name='pipe')
-        Data_C = pd.read_excel(path, sheet_name='comp')
-        Data_sto = pd.read_excel(path, sheet_name='sto')
-        Cost = np.concatenate((Data_W['Cg'].values, Data_T['C_O'].values, Data_C['costc'], Data_Dc['al_Res'].values,
-                               Data_Dc['al_Ind'].values, Data_Dc['al_Com'].values, Data_Dc[
-                                   'al_NGV'].values, Data_Dc['al_Ref'].values, Data_Dc['al_Pet'].values,
-                               Data_sto['C_S+'].values - Data_sto['C_V'].values, -1 * (Data_sto['C_S-'] - Data_sto['C_V']).values, Data_sto['C_V'].values)).reshape(-1, 1)
-        
-        w = gen_w(Data_inf, Data_W, Data_T, Data_C, Data_Dc, Data_sto)
-        fd = np.array(X_test[im]).max(axis=0)
-        model2 = flow_model(str(path), fd, s=s)
-        if s==0:        
-            model2.load_weights(s1_path /tip1/'Modelo1'/ modelpath[im])
-        else:
-            model2.load_weights(s1_path /tip1/'Modelo2'/ modelpath[im])
-        model_A = tf.keras.Model(
-            inputs=model2.inputs, outputs=model2.get_layer('F').output)
-        model_B = tf.keras.Model(
-            inputs=model2.inputs, outputs=model2.get_layer('P').output)
-        Fe = model_A.predict(np.array(X_test[im]), verbose=False)
-        Pe = model_B.predict(np.array(X_test[im]), verbose=False)
-        i = Data_T['fnode'].values.astype(int) - 1
-        j = Data_T['tnode'].values.astype(int) - 1
-        CK = Data_T['Kij'].values.reshape(-1,)
-        nod = len(Data_inf)
-        Fte = Fe[:, 1:1 + len(Data_T)]
-        Pie = Pe[:, i]
-        Pje = Pe[:, j]
-        Pte = np.sign(Pie**2 - Pje**2) * \
-            np.sqrt(CK * np.abs(Pie**2 - Pje**2))
+    for net in NET_IDS:
+        c = campaign_case(tip1, net, s, s1)
+        ok, ip = c['ok'], c['ipopt']
+        r = case_metrics(net, c['X'][ok], c['F'][ok], c['P'][ok], tip2)
+        i = case_metrics(net, ip['X'][ok], ip['F'][ok], ip['P'][ok], tip2)
+        lab = net_label(net)
+        for frame, key in ((Weymouth, 'weymouth'), (Balance, 'balance'), (Costos, 'cost'), (PjPi, 'ratio')):
+            frame['IPOPT(' + lab + ')'] = pd.Series(i[key])
+            frame['RPINN(' + lab + ')'] = pd.Series(r[key])
 
-        costos = evaluate_cost(Fe @ Cost[:-1], Co[im].reshape(-1,1))
-        ic = Data_C['fnode'].values - 1
-        jc = Data_C['tnode'].values - 1
-        Bc = Data_C['ratio'].values
-        Bc = Data_C['ratio'].values
-        are = np.round(Pe[:, jc] / Pe[:, ic], 3)
-        ind1 = np.unique(np.concatenate((np.where(~(are[:, 0] <= Bc[0]) | ~(are[:, 0] >= 1.0))[
-            0], np.where(~(are[:, 1] <= Bc[1]) | ~(are[:, 1] >= 1.0))[0])))
-        re1 = np.zeros(Fe.shape[0])
-        if len(ind1) != 0:
-            re1[ind1] = 100
-        if im <= 7:
-            Weymouth['IPOPT(' + str(nod) + ')'] = pd.Series(Weys[im].reshape(-1,))
-            Weymouth['RPINN(' + str(nod) + ')'] = pd.Series(evaluate_weymouth_two(Fte, Pte,tip2))
-            Balance['IPOPT(' + str(nod) + ')'] =  pd.Series(Bals[im].reshape(-1,))
-            Balance['RPINN(' + str(nod) + ')'] = pd.Series(evaluate_balance_two(Fe, w, np.array(X_test[im]),tip2))
-            Costos['IPOPT(' + str(nod) + ')'] = pd.Series(Co[im].reshape(-1,))
-            Costos['RPINN(' + str(nod) + ')'] = pd.Series(np.array(Fe @ Cost[:-1]).reshape(-1,))
-            PjPi['IPOPT(' + str(nod) + ')'] = pd.Series(Coms[im].reshape(-1,))
-            PjPi['RPINN(' + str(nod) + ')'] = pd.Series(re1)
-            
-        else:
-            Weymouth['IPOPT(Col_18)'] = pd.Series(Weys[im].reshape(-1,))
-            Weymouth['RPINN(Col_18)'] = pd.Series(evaluate_weymouth_two(Fte, Pte,tip2))
-            Balance['IPOPT(Col_18)'] =  pd.Series(Bals[im].reshape(-1,))
-            Balance['RPINN(Col_18)'] = pd.Series(evaluate_balance_two(Fe, w, np.array(X_test[im]),tip2))
-            Costos['IPOPT(Col_18)'] = pd.Series(Co[im].reshape(-1,))
-            Costos['RPINN(Col_18)'] = pd.Series(np.array(Fe @ Cost[:-1]).reshape(-1,))     
-            PjPi['IPOPT(Col_18)'] = pd.Series(Coms[im].reshape(-1,))
-            PjPi['RPINN(Col_18)'] = pd.Series(re1)
-            
     if plotb:
         plots(Balance, Weymouth, PjPi, Costos, s=s,selec=selec)
         return(Balance, Weymouth, PjPi, Costos)
@@ -1323,100 +1255,26 @@ def evaluate_weymouth_two(X, Y,s='MAPE'):
     else:
         return [mae(X[i], Y[i]) for i in range(len(X))]
 
-def ng_evaluate_atip(s1=f'{DATA_DIR}/',tip1='M',tip2='MAPE', s=1,selec='All'):
+def ng_evaluate_atip(s1=None,tip1='M',tip2='MAPE', s=1,selec='All'):
     """
-    Evaluate different neural network models on various gas network cases and plot their performance metrics.
+    RPINN on the held-out samples IPOPT did not solve (cap or failure), every network of one scenario.
 
-    Parameters:
-    - s1 (str): Base directory path for the model and Excel data files.
-    - s2 (str): Path for the input data files.
-    - s (int): Scenario indicator for choosing different sets of model paths.
-
-    The function processes multiple gas network cases in a loop. For each case, it loads necessary data,
-    constructs and loads a neural network model, and predicts outputs. It then evaluates these predictions
-    using custom functions for different metrics such as Weymouth formula, balance, cost, and pressure ratios.
-    The function visualizes these metrics using boxplot graphs.
-
-    Returns:
-    - tuple: A tuple containing lists of evaluation metrics (Balance, Weymouth, PjPi, Costos) for each network case.
+    Parameters: s1 campaign folder (default ``RUN_DIR``), tip1 scenario, tip2 'MAPE' or 'MAE',
+    s 0 (Modelo1) or 1 (Modelo2). Returns lists (one entry per network) of
+    (Balance, Weymouth, Pj/Pi, Cost). Writes ``RGASATIP.pdf`` (``RGASATIP_1.pdf`` otherwise).
     """
-    s1_path = Path(s1) 
-
-
-    if s == 0:
-        modelpath = ['model1_8.h5', 'model1_9.h5', 'model1_10.h5', 'model1_11.h5',
-                     'model1_12.h5', 'model1_13.h5', 'model1_14.h5', 'model1_15.h5', 'model1_Col.h5']
-    elif s == 1:
-        modelpath = ['model2_8.h5', 'model2_9.h5', 'model2_10.h5', 'model2_11.h5',
-                     'model2_12.h5', 'model2_13.h5', 'model2_14.h5', 'model2_15.h5', 'model2_Col.h5']
-    filepath = ['ng_case8.xlsx', 'ng_case9.xlsx', 'ng_case10.xlsx', 'ng_case11.xlsx',
-                'ng_case12.xlsx', 'ng_case13.xlsx', 'ng_case14.xlsx', 'ng_case15.xlsx', 'ng_caseCol_18.xlsx']
-    
     Weymouth = []  # pd.DataFrame()
     Balance = []  # pd.DataFrame()
     Costos = []  # pd.DataFrame()
     PjPi = []  # pd.DataFrame()
-    X_test_ = sio.loadmat(s1_path / tip1/tip2 /'inputs_None.mat')['inputs']
-    for im in range(9):
-        path = s1_path / 'Redes' / filepath[im]
-        Data_inf = pd.read_excel(path, sheet_name='node.info')
-        Data_D = pd.read_excel(path, sheet_name='node.dem')
-        Data_Dc = pd.read_excel(path, sheet_name='node.demcost')
-        Data_W = pd.read_excel(path, sheet_name='well')
-        Data_T = pd.read_excel(path, sheet_name='pipe')
-        Data_C = pd.read_excel(path, sheet_name='comp')
-        Data_sto = pd.read_excel(path, sheet_name='sto')
-        Cost = np.concatenate((Data_W['Cg'].values, Data_T['C_O'].values, Data_C['costc'], Data_Dc['al_Res'].values,
-                               Data_Dc['al_Ind'].values, Data_Dc['al_Com'].values, Data_Dc[
-                                   'al_NGV'].values, Data_Dc['al_Ref'].values, Data_Dc['al_Pet'].values,
-                               Data_sto['C_S+'].values - Data_sto['C_V'].values, -1 * (Data_sto['C_S-'] - Data_sto['C_V']).values, Data_sto['C_V'].values)).reshape(-1, 1)
-        w = gen_w(Data_inf, Data_W, Data_T, Data_C, Data_Dc, Data_sto)
-        #if im == 8:
-        #    X_test = sio.loadmat(
-        #        s2_path / f'inputs_None_{im + 8}.mat')['inputs'][0]
-
-        #else:
-        #   X_test = sio.loadmat(
-        #        s2_path / f'inputs_None_{im + 8}.mat')['inputs']
-        X_test=X_test_[0][im]
-        fd = np.array(X_test).max(axis=0)
-        model2 = flow_model(str(path), fd, s=s)
-        if s==0:        
-            model2.load_weights(s1_path /tip1/'Modelo1'/ modelpath[im])
-        else:
-            model2.load_weights(s1_path /tip1/'Modelo2'/ modelpath[im])
-        model_A = tf.keras.Model(
-            inputs=model2.inputs, outputs=model2.get_layer('F').output)
-        model_B = tf.keras.Model(
-            inputs=model2.inputs, outputs=model2.get_layer('P').output)
-        Fe = model_A.predict(np.array(X_test), verbose=False)
-        Pe = model_B.predict(np.array(X_test), verbose=False)
-        i = Data_T['fnode'].values.astype(int) - 1
-        j = Data_T['tnode'].values.astype(int) - 1
-        CK = Data_T['Kij'].values.reshape(-1,)
-
-        Fte = Fe[:, 1:1 + len(Data_T)]
-        Pie = Pe[:, i]
-        Pje = Pe[:, j]
-        Pte = np.sign(Pie**2 - Pje**2) * \
-            np.sqrt(CK * np.abs(Pie**2 - Pje**2))       
-        balance = evaluate_balance_two(Fe, w, np.array(X_test))
-        wey = evaluate_weymouth_two(Fte, Pte)
-        ic = Data_C['fnode'].values - 1
-        jc = Data_C['tnode'].values - 1
-        Bc = Data_C['ratio'].values
-        are = np.round(Pe[:, jc] / Pe[:, ic], 3)
-        ind1 = np.unique(np.concatenate((np.where(~(are[:, 0] <= Bc[0]) | ~(are[:, 0] >= 1.0))[
-                         # .shape[0]/are.shape[0]*100
-                         0], np.where(~(are[:, 1] <= Bc[1]) | ~(are[:, 1] >= 1.0))[0])))
-        re1 = np.zeros(X_test.shape[0])
-        if len(ind1) != 0:
-            re1[ind1] = 100
-        costos = (Fe @ Cost[:-1]).flatten()
-        Weymouth.append(wey)
-        Balance.append(balance)
-        Costos.append(costos)
-        PjPi.append(re1)
+    for net in NET_IDS:
+        cs = campaign_case(tip1, net, s, s1)
+        bad = ~cs['ok']
+        m = case_metrics(net, cs['X'][bad], cs['F'][bad], cs['P'][bad], tip2)
+        Weymouth.append(m['weymouth'])
+        Balance.append(m['balance'])
+        Costos.append(m['cost'])
+        PjPi.append(m['ratio'])
     if selec == 'All':
         fig, axs = plt.subplots(2, 2, figsize=(29, 20))
         ax1 = axs[0, 0]
@@ -1612,7 +1470,7 @@ def visualize_atipic(dataframes1, dataframes2, columns):
     
     plt.savefig(f'{OUTPUT_DIR}/Atipicos.pdf',bbox_inches='tight')
     plt.show()
-def visualize_non_convergence(data_path=f'{DATA_DIR}/', network_range=(0, 9), tips=['D']):
+def visualize_non_convergence(data_path=None, network_range=(0, 9), tips=['D']):
     """
     Visualizes the percentage of non-convergence cases for different network dimensions.
 
@@ -1627,17 +1485,12 @@ def visualize_non_convergence(data_path=f'{DATA_DIR}/', network_range=(0, 9), ti
     all_percentages = []
     labels = None
 
+    from RPINN import paper_figures as pf
+    run = Path(data_path or RUN_DIR)
     for tip in tips:
-        data = sio.loadmat(data_path + tip + '/MAPE/inputs_None.mat')['inputs']
-        percentages = []
-
-        for file_index in range(*network_range):
-            non_convergence_percentage = (data[0][file_index].shape[0] / 1000) * 100
-            percentages.append(non_convergence_percentage)
-
-            if labels is None:
-                label = f'N(Col_18)' if file_index == 16 else f'N({data[0][file_index].shape[1]})'
-                labels = [label] if labels is None else labels + [label]
+        # Share (%) of the 320 held-out samples IPOPT did not solve (60 s cap or failure).
+        percentages = [float((pf.ipopt(run, tip, net)['status'] != 'ok').mean() * 100)
+                       for net in NET_IDS[slice(*network_range)]]
         all_percentages.append(percentages)
         # Etiquetas para cada conjunto de barras
     labels = [f'IPOPT({i+8})' for i in range(len(all_percentages[0]))]
@@ -1671,7 +1524,7 @@ def visualize_non_convergence(data_path=f'{DATA_DIR}/', network_range=(0, 9), ti
     plt.savefig(f'{OUTPUT_DIR}/Convergencia.pdf',bbox_inches='tight')
     plt.show()
     # Ejemplo de uso
-def dynamic_val(s=1,tip='M',s1=f'{DATA_DIR}/Redes/', s2=f'{DATA_DIR}/'):
+def dynamic_val(s=1,tip='M',s1=f'{DATA_DIR}/Redes/', s2=None, seed=0):
     """
     Generates sinusoidal behavior and adjusts random data accordingly.
 
@@ -1686,7 +1539,7 @@ def dynamic_val(s=1,tip='M',s1=f'{DATA_DIR}/Redes/', s2=f'{DATA_DIR}/'):
     sine_wave = abs(amplitude * np.sin(frequency * x))
 
     # Step 2: Create a matrix of random data
-    data = np.random.rand(1000, 8)  # Random data
+    data = np.random.default_rng(seed).random((1000, 8))  # Random data, seeded
 
     # Step 3: Adjust random data
     # The idea is to scale the data so that its sum along the rows equals the corresponding sine wave value
@@ -1695,7 +1548,7 @@ def dynamic_val(s=1,tip='M',s1=f'{DATA_DIR}/Redes/', s2=f'{DATA_DIR}/'):
     adjustment_factor = sine_wave / data_sum  # Adjustment factor for each row
 
     s1_path = Path(s1)
-    s2_path = Path(s2)
+    s2_path = Path(s2 or RUN_DIR)  # the paper campaign
 
     # Adjust the data
     for i in range(data.shape[1]):
@@ -1717,7 +1570,7 @@ def dynamic_val(s=1,tip='M',s1=f'{DATA_DIR}/Redes/', s2=f'{DATA_DIR}/'):
                                'al_NGV'].values, Data_Dc['al_Ref'].values, Data_Dc['al_Pet'].values,
                            Data_sto['C_S+'].values - Data_sto['C_V'].values, -1 * (Data_sto['C_S-'] - Data_sto['C_V']).values, Data_sto['C_V'].values)).reshape(-1, 1)
     w = gen_w(Data_inf, Data_W, Data_T, Data_C, Data_Dc, Data_sto)
-    fd = X_test.max(axis=0)
+    fd = np.load(s2_path / tip / 'Modelo1' / 'fd_8.npy')  # the scaling each model was trained with
     # Assuming Fd, Fw, and data are your data.
     plt.figure(figsize=(15, 5))
     model2 = flow_model(path, fd, s=0)
@@ -1740,6 +1593,7 @@ def dynamic_val(s=1,tip='M',s1=f'{DATA_DIR}/Redes/', s2=f'{DATA_DIR}/'):
     axs[1].plot(Fd.sum(axis=1)+Fw, label="Gas Balance")
 
     modelpath = 'model2_8.h5'
+    fd = np.load(s2_path / tip / 'Modelo2' / 'fd_8.npy')
     model2 = flow_model(path, fd, s=1)
     model2.load_weights(s2_path /tip/'Modelo2'/ modelpath)
     model_A = tf.keras.Model(inputs=model2.inputs,
@@ -1831,72 +1685,22 @@ def loss_val(path=f'{DATA_DIR}/Registro/'):
     plt.savefig(f'{OUTPUT_DIR}/LOSSM.pdf',bbox_inches='tight')
     plt.show()
 
-def bounded(s1=f'{DATA_DIR}/',tip='D',s=1,im=8):
+def bounded(s1=None,tip='D',s=1,im=8):
     """
-     Generates box plots to visualize and compare performance metric differences across various models.
+    Violin plots of the RPINN injection, pipe and compressor flows and the node pressures of one
+    network against their limits (stars), on the 320 held-out samples of the paper campaign.
 
-     This function loads performance data of different models from the Weymouth.xlsx, Balance.xlsx, and Costos.xlsx files.
-     Then, box plots are generated for each of these metrics, showing how the performance values are distributed
-     among the different models.
-
-     The plots display the Mean Absolute Percentage Error (MAPE) and costs, facilitating visual comparison between the models.
-     A logarithmic scale is used to ease the visualization of data that may have a wide range of values.
-
-     Parameters
-     ----------
-     s1 : str, optional
-         Path to the directory containing input data files. Default is f'{DATA_DIR}/'.
-     s2 : str, optional
-         Path to the directory containing model data files. Default is f'{DATA_DIR}/Registro/'.
-     s : int, optional
-         Determines the type of model. If 0, uses one set of models, if 1, uses another set. Default is 1.
-
-     Returns
-     -------
-     None
-         The results are directly displayed as plots.
-     """
-    s1_path = Path(s1)
-    X_test = load_data(s1_path / tip/'MAE' /'inputs_P.mat', 'inputs')
-
-    if s == 0:
-        modelpath = ['model1_8.h5', 'model1_9.h5', 'model1_10.h5', 'model1_11.h5',
-                     'model1_12.h5', 'model1_13.h5', 'model1_14.h5', 'model1_15.h5', 'model1_Col.h5']
-    elif s == 1:
-        modelpath = ['model2_8.h5', 'model2_9.h5', 'model2_10.h5', 'model2_11.h5',
-                     'model2_12.h5', 'model2_13.h5', 'model2_14.h5', 'model2_15.h5', 'model2_Col.h5']
-    filepath = ['ng_case8.xlsx', 'ng_case9.xlsx', 'ng_case10.xlsx', 'ng_case11.xlsx','ng_case12.xlsx', 'ng_case13.xlsx', 'ng_case14.xlsx', 'ng_case15.xlsx', 'ng_caseCol_18.xlsx']
-    Weymouth = pd.DataFrame()
-    Balance = pd.DataFrame()
-    Costos = pd.DataFrame()
-    PjPi = pd.DataFrame()
-    im = im
-    path = s1_path / 'Redes' / filepath[im]
+    Parameters: s1 campaign folder (default ``RUN_DIR``), tip scenario, s 0 (Modelo1) or 1
+    (Modelo2), im network index in ``NET_IDS`` (8 is Colombia). Writes ``LIM.pdf``; returns Pe.
+    """
+    net = NET_IDS[im]
+    path = net_path_of(net)
     Data_inf = pd.read_excel(path, sheet_name='node.info')
-    Data_D = pd.read_excel(path, sheet_name='node.dem')
-    Data_Dc = pd.read_excel(path, sheet_name='node.demcost')
     Data_W = pd.read_excel(path, sheet_name='well')
     Data_T = pd.read_excel(path, sheet_name='pipe')
     Data_C = pd.read_excel(path, sheet_name='comp')
-    Data_sto = pd.read_excel(path, sheet_name='sto')
-    Cost = np.concatenate((Data_W['Cg'].values, Data_T['C_O'].values, Data_C['costc'], Data_Dc['al_Res'].values,
-                           Data_Dc['al_Ind'].values, Data_Dc['al_Com'].values, Data_Dc[
-                               'al_NGV'].values, Data_Dc['al_Ref'].values, Data_Dc['al_Pet'].values,
-                           Data_sto['C_S+'].values - Data_sto['C_V'].values, -1 * (Data_sto['C_S-'] - Data_sto['C_V']).values, Data_sto['C_V'].values)).reshape(-1, 1)
-    w = gen_w(Data_inf, Data_W, Data_T, Data_C, Data_Dc, Data_sto)
-    fd = np.array(X_test[im]).max(axis=0)
-    model2 = flow_model(str(path), fd, s=s)
-    model2.load_weights(s1_path/tip /'Modelo2'/ modelpath[im])
-    model_A = tf.keras.Model(inputs=model2.inputs,
-                             outputs=model2.get_layer('F').output)
-    model_B = tf.keras.Model(inputs=model2.inputs,
-                             outputs=model2.get_layer('P').output)
-    Fe = model_A.predict(np.array(X_test[im]), verbose=False)
-    Pe = model_B.predict(np.array(X_test[im]), verbose=False)
-    i = Data_T['fnode'].values.astype(int) - 1
-    j = Data_T['tnode'].values.astype(int) - 1
-    CK = Data_T['Kij'].values.reshape(-1,)
-    nod = len(Data_inf)
+    c = campaign_case(tip, net, s, s1)
+    Fe, Pe = c['F'], c['P']
     Fte = Fe[:, 1:1 + len(Data_T)]
     Fce = Fe[:, 1 + len(Data_T):1 + len(Data_T) + len(Data_C)]
     Fwe = Fe[:, 0:1]

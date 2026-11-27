@@ -54,54 +54,40 @@ from typing import List, Optional
 mse = mean_squared_error
 mae = mean_absolute_error
 mape = mean_absolute_percentage_error
-def sintplot_tim():
-    FtestM=np.load(f'{DATA_DIR}/Sintéticos/FlytestM.npy')
-    Ftest=np.load(f'{DATA_DIR}/Sintéticos/Flytest.npy').sum(axis=-1)
-    FtrainM=np.load(f'{DATA_DIR}/Sintéticos/FlytrainM.npy')
-    Ftrain=np.load(f'{DATA_DIR}/Sintéticos/Flytrain.npy').sum(axis=-1)
-    testM=np.load(f'{DATA_DIR}/Sintéticos/TestM.npy')
-    test=np.load(f'{DATA_DIR}/Sintéticos/Test.npy')
-    trainM=np.load(f'{DATA_DIR}/Sintéticos/TrainM.npy')
-    train=np.load(f'{DATA_DIR}/Sintéticos/Train.npy')
+def sintplot_tim(run=None):
+    """Time of IPOPT and RPINN on the mixture model, from the paper campaign (``v1-paper-run``).
+
+    Left: IPOPT solve time against RPINN training time. Right: IPOPT solve time against RPINN
+    prediction time. One value per repetition and SNR level (100 x 5). Writes ``Time2.pdf``.
+    """
+    reps = mixture_reps(run)
+    train = np.concatenate([d['solve_s_ipopt'] for d in reps])
+    trainM = np.concatenate([d['train_s_rpinn'] for d in reps])
+    test = np.concatenate([d['solve_s_ipopt'] for d in reps])
+    testM = np.concatenate([d['pred_s_rpinn'] for d in reps])
 
     a=pd.DataFrame()
     b=pd.DataFrame()
-    a['CLARABEL']=Ftrain
-    a['RPINN']=FtrainM
-    b['CLARABEL']=Ftest
-    b['RPINN']=FtestM
-    colors = ['skyblue' if i % 2 == 0 else 'lightgreen' for i in range(len(a.columns))]
-    fig, axs = plt.subplots(2, 2,figsize=(22, 15))
-    sns.violinplot(a[['CLARABEL','RPINN']], inner='box', cut=0, palette=colors, ax=axs[0,0])
-    axs[0,0].set_yscale('log')
-    axs[0,0].set_ylim([1e-3,2e2])
-    axs[0,0].tick_params(axis='x', labelsize=20)
-    axs[0,0].tick_params(axis='y', labelsize=20)
-    axs[0,0].grid(True)
-    sns.violinplot(b[['CLARABEL','RPINN']], inner='box', cut=0, palette=colors, ax=axs[0,1])
-    axs[0,1].set_yscale('log')
-    axs[0,1].set_ylim([1e-3,2e2])
-    axs[0,1].tick_params(axis='x', labelsize=20)
-    axs[0,1].tick_params(axis='y', labelsize=20)
-    axs[0,1].grid(True)
+    colors = ['skyblue' if i % 2 == 0 else 'lightgreen' for i in range(2)]
+    fig, axs = plt.subplots(1, 2,figsize=(22, 15))
 
-    a['SCS']=train
+    a['IPOPT']=train
     a['RPINN']=trainM
-    b['SCS']=test
+    b['IPOPT']=test
     b['RPINN']=testM
 
-    sns.violinplot(a[['SCS','RPINN']], inner='box', cut=0, palette=colors, ax=axs[1,0])
-    axs[1,0].set_yscale('log')
-    axs[1,0].set_ylim([1e-3,2e2])
-    axs[1,0].tick_params(axis='x', labelsize=20)
-    axs[1,0].tick_params(axis='y', labelsize=20)
-    axs[1,0].grid(True)
-    sns.violinplot(b[['SCS','RPINN']], inner='box', cut=0, palette=colors, ax=axs[1,1])
-    axs[1,1].set_yscale('log')
-    axs[1,1].set_ylim([1e-3,2e2])
-    axs[1,1].tick_params(axis='x', labelsize=20)
-    axs[1,1].tick_params(axis='y', labelsize=20)
-    axs[1,1].grid(True)
+    sns.violinplot(a[['IPOPT','RPINN']], inner='box', cut=0, palette=colors, ax=axs[0])
+    axs[0].set_yscale('log')
+    axs[0].set_ylim([1e-3,2e2])
+    axs[0].tick_params(axis='x', labelsize=20)
+    axs[0].tick_params(axis='y', labelsize=20)
+    axs[0].grid(True)
+    sns.violinplot(b[['IPOPT','RPINN']], inner='box', cut=0, palette=colors, ax=axs[1])
+    axs[1].set_yscale('log')
+    axs[1].set_ylim([1e-3,2e2])
+    axs[1].tick_params(axis='x', labelsize=20)
+    axs[1].tick_params(axis='y', labelsize=20)
+    axs[1].grid(True)
 
 
     fig.text(0.5, -0.1, '', ha='center', va='center',fontsize=20)  # Etiqueta común para el eje x centrada
@@ -109,6 +95,7 @@ def sintplot_tim():
 
     plt.savefig(f'{OUTPUT_DIR}/Time2.pdf',bbox_inches='tight')
     plt.show()
+
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
@@ -124,114 +111,62 @@ def _default_data_dir() -> Path:
 
 DATA_DIR = _default_data_dir()
 OUTPUT_DIR = Path(os.environ.get("RPINN_OUTPUT_DIR", "."))
-def Weight():
-    # Suponiendo que array1 y array2 son tus arrays originales
-    U=np.load(f'{DATA_DIR}/Sintéticos/U.npy')
-
-    Y=np.load(f'{DATA_DIR}/Sintéticos/Y.npy')
-    array1 = np.load(f'{DATA_DIR}/Sintéticos/PI_EM.npy')
-    array2 = np.load(f'{DATA_DIR}/Sintéticos/PI_ES.npy')
-    array3 = np.load(f'{DATA_DIR}/Sintéticos/PI_T.npy')
-
-    # Convertir arrays en DataFrames
-    df1 = pd.DataFrame(array1,columns=['NN(x1)','NN(x2)','NN(x3)','NN(x4)','NN(x5)'])
-    df2 = pd.DataFrame(array2,columns=['S(x1)','S(x2)','S(x3)','S(x4)','S(x5)'])
-    df3 = pd.DataFrame(array3,columns=['x1','x2','x3','x4','x5'])
-
-    # Crear un DataFrame vacío con el tamaño deseado
-    dfm = pd.DataFrame(index=np.arange(500), columns=['x1','NN(x1)','x2','NN(x2)','x3','NN(x3)','x4','NN(x4)','x5','NN(x5)'])
-    dfs = pd.DataFrame(index=np.arange(500), columns=['x1','S(x1)','x2','S(x2)','x3','S(x3)','x4','S(x4)','x5','S(x5)'])
-
-    # Intercalar las columnas
-    for i in range(5):
-        dfm.iloc[:,i*2] = df3.iloc[:,i]
-        dfm.iloc[:,i*2 + 1] = df1.iloc[:,i]
-        dfs.iloc[:,i*2] = df3.iloc[:,i]
-        dfs.iloc[:,i*2 + 1] = df2.iloc[:,i]
-
-    # Opcional: renombrar las column3as si es necesario
-    fig = plt.figure(figsize=(19, 19))
-    gs = GridSpec(nrows=3, ncols=2)
-    import math
-    # Cargando el DataFrame desde un archivo Excel
-    df = pd.read_excel(f'{DATA_DIR}/Sintéticos/Modely.xlsx')
-
-    # Calculando el valor mínimo para cada columna
-    minimos = df.min()
-
-    # Encontrando la posición del valor mínimo en cada columna
-    posiciones_minimas = df.idxmin()
-    index = [int(x) for x in posiciones_minimas if not math.isnan(x)]
-
-    # Plot MAPE for y[-1,1,3,5,none]
-    ax0 = fig.add_subplot(gs[0, 0])
-    ax0.plot(U[index[0]]@array1[index[0], :],'k.',marker='X')
-    ax0.plot(U[index[0]]@array2[index[0], :],'b.',marker='*')
-    ax0.plot(Y[0,index[0],:].flatten(),'r.')
-    ax0.plot(Y[-1,index[0],:],color='g')
-    ax0.set_ylim([-2.5,7])
-    ax0.set_ylabel('')
-    ax0.tick_params(axis='x', labelsize=20)
-    ax0.tick_params(axis='y', labelsize=20)
-
-    ax0 = fig.add_subplot(gs[1, 0])
-    ax0.plot(U[index[3]]@array1[index[3]+200, :],'k.',marker='X')
-    ax0.plot(U[index[3]]@array2[index[3]+200, :],'b.',marker='*')
-    ax0.plot(Y[3,index[0],:],'r.')
-    ax0.plot(Y[-1,index[0],:],color='g')
-    ax0.set_ylim([-2.5,7])
-    ax0.set_ylabel('')
-    ax0.tick_params(axis='x', labelsize=20)
-    ax0.tick_params(axis='y', labelsize=20)
+RUN_DIR = DATA_DIR / "v1-paper-run"
+# SNR levels of the campaign, in the order of every ``mixture_rep*.npz`` array (None: noise-free).
+SNR_LEVELS = [-1, 1, 3, 5, None]
 
 
-    ax0 = fig.add_subplot(gs[2, 0])
-    ax0.plot(U[index[-1]]@array1[index[-1]+400, :],'k.',marker='X')
-    ax0.plot(U[index[-1]]@array2[index[-1]+400, :],'b.',marker='*')
-    ax0.plot(Y[-1,index[0],:],color='g')
-    ax0.set_ylim([-2.5,7])
-    ax0.set_ylabel('')
-    ax0.tick_params(axis='x', labelsize=20)
-    ax0.tick_params(axis='y', labelsize=20)
+def mixture_reps(run=None) -> list:
+    """The 100 repetitions of the mixture model in ``run/Sinteticos/mixture_rep*.npz``."""
+    files = sorted((Path(run or RUN_DIR) / "Sinteticos").glob("mixture_rep*.npz"))
+    if not files:
+        raise FileNotFoundError(f"no mixture_rep*.npz under {Path(run or RUN_DIR) / 'Sinteticos'}")
+    return [{k: v for k, v in np.load(f).items()} for f in files]
 
 
-    # Plot MAPE for y[-1,1,3,5,none]
-    ax0 = fig.add_subplot(gs[0, 1])
-    sns.kdeplot(array1[0:100, :].flatten(),color='k',ax=ax0)
-    sns.kdeplot(array2[0:100, :].flatten(),color='b',ax=ax0)
-    sns.kdeplot(array3[0:100, :].flatten(),color='g',ax=ax0)
-    ax0.set_ylim([0,18])
-    ax0.set_ylabel('')
-    ax0.tick_params(axis='x', labelsize=20)
-    ax0.tick_params(axis='y', labelsize=20)
+def _mape100(true, pred) -> float:
+    """MAPE in percent, the reference value as truth (the paper's metric, RPINN.paper_figures.mape)."""
+    from RPINN.paper_figures import mape as _m
+    return float(_m(true, pred))
 
 
-    ax0 = fig.add_subplot(gs[1, 1])
-    sns.kdeplot(array1[200:300, :].flatten(),color='k',ax=ax0)
-    sns.kdeplot(array2[200:300, :].flatten(),color='b',ax=ax0)
-    sns.kdeplot(array3[200:300, :].flatten(),color='g',ax=ax0)
-    ax0.set_ylim([0,18])
-    ax0.set_ylabel('')
-    ax0.tick_params(axis='x', labelsize=20)
-    ax0.tick_params(axis='y', labelsize=20)
+def Weight(run=None, levels=(-1, 3, None)):
+    """Output prediction and weight distribution of the mixture model (paper Figure 7).
 
+    One row per SNR level in ``levels`` (paper: -1 dB, 3 dB and noise-free). Left: output of
+    each sample; green target, red noisy target, black RPINN, blue IPOPT, for the repetition
+    whose RPINN weight error is the median one at that level. Right: density of the weights
+    over the 100 repetitions. Writes ``W.pdf``.
+    """
+    reps = mixture_reps(run)
+    rows = [SNR_LEVELS.index(l) for l in levels]
+    fig = plt.figure(figsize=(19, 9.5 * len(rows)))
+    gs = GridSpec(nrows=len(rows), ncols=2)
 
-    ax0 = fig.add_subplot(gs[2, 1])
-    sns.kdeplot(array1[400:, :].flatten(),color='k',ax=ax0)
-    sns.kdeplot(array2[400:, :].flatten(),color='b',ax=ax0)
-    sns.kdeplot(array3[400:, :].flatten(),color='g',ax=ax0)
-    ax0.set_ylim([0,18])
-    ax0.set_ylabel('')
-    ax0.tick_params(axis='x', labelsize=20)
-    ax0.tick_params(axis='y', labelsize=20)
+    for r, j in enumerate(rows):
+        err = np.array([_mape100(d['pi'], d['x_rpinn'][j]) for d in reps])
+        d = reps[int(np.argsort(err)[len(err) // 2])]
+        ax0 = fig.add_subplot(gs[r, 0])
+        ax0.plot(d['Z']@d['x_rpinn'][j],'k.',marker='X')
+        ax0.plot(d['Z']@d['x_ipopt'][j],'b.',marker='*')
+        if SNR_LEVELS[j] is not None:
+            ax0.plot(d['y_noisy'][j].flatten(),'r.')
+        ax0.plot(d['y'],color='g')
+        ax0.set_ylabel('')
+        ax0.tick_params(axis='x', labelsize=20)
+        ax0.tick_params(axis='y', labelsize=20)
+
+        ax1 = fig.add_subplot(gs[r, 1])
+        sns.kdeplot(np.concatenate([d['x_rpinn'][j] for d in reps]),color='k',ax=ax1)
+        sns.kdeplot(np.concatenate([d['x_ipopt'][j] for d in reps]),color='b',ax=ax1)
+        sns.kdeplot(np.concatenate([d['pi'] for d in reps]),color='g',ax=ax1)
+        ax1.set_ylabel('')
+        ax1.tick_params(axis='x', labelsize=20)
+        ax1.tick_params(axis='y', labelsize=20)
 
     # Añadir ejes externos para nombres de ejes comunes
     ax_line = fig.add_subplot(gs[:, 0], frameon=False)  # Eje común para la primera columna
     ax_density = fig.add_subplot(gs[:, 1], frameon=False)  # Eje común para la segunda columna
-
-    ax_line.tick_params(axis='x', labelsize=20)
-    ax_line.tick_params(axis='y', labelsize=20)
-    # Desactivar ticks y tick labels
     ax_line.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False,labelsize=20)
     ax_density.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False,labelsize=20)
 
@@ -241,11 +176,9 @@ def Weight():
     ax_density.set_ylabel("Weight pdf",fontsize=20)
     ax_density.set_xlabel("Weight values",fontsize=20)
 
-    #plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-    # Ajusta automáticamente los subplots para que el layout sea claro
     plt.savefig(f'{OUTPUT_DIR}/W.pdf',bbox_inches='tight')
     plt.show()
+
 
 def add_noise(data: np.ndarray, snr: float, mu: float = 0.0) -> np.ndarray:
     """
@@ -517,6 +450,10 @@ class Evaluate:
             pd.DataFrame: A DataFrame containing the history of the model's loss and validation loss.
         """
 
+        # 2024 thesis data (RPINN/Data/Sintéticos); the paper campaign trained the Huber loss only.
+        if not hasattr(self, 'U'):
+            self.U = np.load(f'{DATA_DIR}/Sintéticos/U.npy')
+            self.Y = np.load(f'{DATA_DIR}/Sintéticos/Y.npy')
         # Obtener los datos de entrada y salida
         u = self.U[-1]
         y = self.Y[-1, 0]
@@ -595,17 +532,55 @@ class Evaluate:
         #np.save(f'{self.output_path}PI_ES',np.array(aux1))
         return MAPE_y, MAPE_pi
 
-    def plot(self, solver: str, path: str = '') -> None:
+    def campaign_mape(self, run=None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """MAPE (%) of the output and of the weights per repetition, from the paper campaign.
+
+        Columns ``RPINN(-1)``, ``IPOPT(-1)``, ..., ``RPINN(N)``, ``IPOPT(N)``; one row per repetition.
+        The output error is measured on the 100 test samples against the noise-free target.
         """
-        Plot the Mean Absolute Percentage Error (MAPE) for model predictions using a specified solver.
+        reps = mixture_reps(run)
+        MAPE_y, MAPE_pi = pd.DataFrame(), pd.DataFrame()
+        for j, level in enumerate(SNR_LEVELS):
+            tag = 'N' if level is None else str(level)
+            for method in ('RPINN', 'IPOPT'):
+                key = method.lower()
+                MAPE_y[f'{method}({tag})'] = [_mape100(d['y'][400:], d[f'pred_{key}'][j]) for d in reps]
+                MAPE_pi[f'{method}({tag})'] = [_mape100(d['pi'], d[f'x_{key}'][j]) for d in reps]
+        return MAPE_y, MAPE_pi
+
+    def plot(self, solver: str = 'IPOPT', path=None) -> None:
+        """
+        Plot the Mean Absolute Percentage Error (MAPE) of the output and the weights (paper Figure 8).
 
         Args:
-            solver (str): The solver used for the optimization problem.
-            path (str): The directory path where the data files are located. Defaults to an empty string.
+            solver (str): The comparison solver. ``'IPOPT'`` reads the paper campaign
+                (``v1-paper-run``); any other name reads the 2024 thesis files.
+            path: For ``'IPOPT'``, the campaign folder (default ``RUN_DIR``); otherwise the
+                folder with the 2024 files (``PIC.npy``, ``U.npy``, ``Y.npy``, ``Z.npy``).
 
         Raises:
             FileNotFoundError: If the path does not contain the expected files.
         """
+        if solver == 'IPOPT':
+            MAPE_y, MAPE_pi = self.campaign_mape(path)
+            MAPE_y = MAPE_y.loc[:, ::-1]
+            MAPE_pi = MAPE_pi.loc[:, ::-1]
+            colors = ['skyblue' if i % 2 == 0 else 'lightgreen' for i in range(len(MAPE_pi.columns))]
+            fig = plt.figure(figsize=(20, 12))
+            gs = GridSpec(nrows=1, ncols=2)
+            for c, frame in enumerate((MAPE_y, MAPE_pi)):
+                ax = fig.add_subplot(gs[0, c])
+                ax.set_yscale('log')
+                sns.violinplot(data=frame, inner='box', cut=0, palette=colors, ax=ax)
+                ax.tick_params(axis='x', labelsize=20, rotation=90)
+                ax.tick_params(axis='y', labelsize=20)
+                ax.set_ylim([1e-10, 1e3])  # the 2024 limits [1e-12, 1e1], in percent
+                ax.grid(True)
+            fig.text(0.07, 0.5, 'MAPE [%]', ha='center', va='center', rotation='vertical',fontsize=20)
+            plt.savefig(f'{OUTPUT_DIR}/Toy.pdf',bbox_inches='tight')
+            plt.show()
+            return
+        path = '' if path is None else str(path)
         self.PIC = np.load(path + 'PIC.npy')
         self.U = np.load(path + 'U.npy')
         self.Y = np.load(path + 'Y.npy')
@@ -975,7 +950,7 @@ class FlyEvaluate:
         mape_w, mape_y = self.solver_eval(mape_w, mape_y, path)
         threshold=1e150
         valor_max_admisible = threshold  
-        mape_w = mape_w.applymap(lambda x: valor_max_admisible if x > threshold else x)
+        mape_w = mape_w.map(lambda x: valor_max_admisible if x > threshold else x)
 
         fig = plt.figure(figsize=(19, 9))
         colors = ['lightgreen','skyblue','skyblue','skyblue','skyblue','skyblue']
