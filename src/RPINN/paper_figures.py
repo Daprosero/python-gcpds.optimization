@@ -321,12 +321,19 @@ def timing_frame(run: Path = RUN) -> pd.DataFrame:
         ip = ipopt(run, tip, net)
         sec = ip["wall_seconds"][:80]
         timing = Path(run) / "timing" / f"{tip}_{net}.json"
-        pred = json.loads(timing.read_text())["predict_seconds"] if timing.exists() else None
+        rec = json.loads(timing.read_text()) if timing.exists() else {}
+        pred = rec.get("predict_seconds")
+        same = np.asarray(rec.get("ipopt_wall_seconds", [np.nan]), float)
+        ok = np.asarray(rec.get("ipopt_status", []), str) == "ok"
+        extra = {"timing_cpu": rec.get("machine", {}).get("cpu"),
+                 "timing_ipopt_seconds_median": float(np.median(same)),
+                 "timing_ipopt_converged": int(ok.sum()), "timing_ipopt_samples": int(len(ok)),
+                 "timing_ipopt_converged_seconds_median": float(np.median(same[ok])) if ok.any() else np.nan}
         for t in u["result"]["trained"]:
             rows.append({"tip": tip, "net": net, "s": t["s"], "cpu": u["machine"]["cpu"],
                          "rpinn_train_seconds": t["train_seconds"], "ipopt_seconds_total_80": float(np.sum(sec)),
                          "ipopt_seconds_median": float(np.median(sec)),
-                         "rpinn_predict_seconds_median": float(np.median(pred)) if pred else np.nan})
+                         "rpinn_predict_seconds_median": float(np.median(pred)) if pred else np.nan, **extra})
     return pd.DataFrame(rows)
 
 
