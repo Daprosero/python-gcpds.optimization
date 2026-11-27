@@ -136,15 +136,20 @@ def unit_command(python: str, k: int, out: Path, workers: int, epochs: int | Non
 def run_unit_isolated(k: int, out: str = "out", workers: int = 4, epochs: int | None = None,
                       samples: int | None = None, env_dir: str = "/tmp/rpinn-py311") -> dict:
     """``run_unit`` under Python 3.11 with ``PINS``, built with uv; raises if the unit fails."""
+    py, env = pinned_python(env_dir)
+    subprocess.run(unit_command(py, k, Path(out).resolve(), workers, epochs, samples), env=env, check=True)
+    return json.loads(Path(out, f"machine_unit{k:03d}.json").read_text())
+
+
+def pinned_python(env_dir: str = "/tmp/rpinn-py311") -> tuple[str, dict]:
+    """The Python 3.11 interpreter with ``PINS`` (built once with uv) and the environment to run ``src`` under it."""
     src = str(Path(__file__).resolve().parents[1])
     py = Path(env_dir) / "bin" / "python"
     if not py.exists():
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", "uv"], check=True)
         subprocess.run([sys.executable, "-m", "uv", "venv", "--python", PYTHON, env_dir], check=True)
         subprocess.run([sys.executable, "-m", "uv", "pip", "install", "--python", str(py), *PINS], check=True)
-    env = dict(os.environ, PYTHONPATH=src, TF_CPP_MIN_LOG_LEVEL="3")
-    subprocess.run(unit_command(str(py), k, Path(out).resolve(), workers, epochs, samples), env=env, check=True)
-    return json.loads(Path(out, f"machine_unit{k:03d}.json").read_text())
+    return str(py), dict(os.environ, PYTHONPATH=src, TF_CPP_MIN_LOG_LEVEL="3")
 
 
 def run_campaign_isolated(out: str = "out", workers: int = 4, epochs: int | None = None,

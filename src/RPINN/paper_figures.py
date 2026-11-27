@@ -342,9 +342,12 @@ def fig12(times: pd.DataFrame, run: Path = RUN, out: Path = OUT, tip: str = "M")
     axs[0].set_title(f"Training vs solving (scenario {tip}, same session)")
     groups = []
     for net in NETS:
-        ip = ipopt(run, tip, net)["wall_seconds"][:80]
         timing = Path(run) / "timing" / f"{tip}_{net}.json"
-        pred = json.loads(timing.read_text())["predict_seconds"] if timing.exists() else [np.nan]
+        if timing.exists():  # both measured in one session (RPINN.timing_runs)
+            rec = json.loads(timing.read_text())
+            pred, ip = rec["predict_seconds"], rec["ipopt_wall_seconds"]
+        else:
+            pred, ip = [np.nan], ipopt(run, tip, net)["wall_seconds"][:80]
         groups.append((net, pred, ip))
     _paired_boxes(axs[1], groups)
     axs[1].set_yscale("log")

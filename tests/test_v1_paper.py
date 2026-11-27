@@ -261,3 +261,31 @@ def test_gas_metrics_score_a_converged_ipopt_solution_as_feasible():
     m = pf.gas_metrics("8", ip["X"][ok], ip["F"][ok], ip["P"][ok])
     assert np.nanmedian(m["balance"]) < 1e-4 and np.all(m["ratio"] == 0)
     assert np.allclose(m["cost"], ip["F"][ok] @ pf.network("8")["cost"])
+
+
+# --- Same-session timing (Fig. 12) -------------------------------------------------
+from RPINN import timing_runs as tr
+
+
+def test_timing_units_cover_every_scenario_and_network_once():
+    from RPINN.paper_runs import NETS, TIPS
+    us = tr.units()
+    assert [u["unit"] for u in us] == list(range(len(TIPS) * len(NETS)))
+    assert {(u["tip"], u["net"]) for u in us} == {(t, n) for t in TIPS for n in NETS}
+
+
+def test_timing_unit_measures_every_prediction_and_the_ipopt_samples(tmp_path):
+    k = next(u["unit"] for u in tr.units() if (u["tip"], u["net"]) == ("S", "8"))
+    rec = tr.run_timing(k, tmp_path, n_ipopt=2, workers=2)
+    saved = __import__("json").loads((tmp_path / "timing" / "S_8.json").read_text())
+    from RPINN.paper_runs import IPOPT_SAMPLES
+    assert len(saved["predict_seconds"]) == IPOPT_SAMPLES == len(saved["predict_seconds_s0"])
+    assert all(t > 0 for t in saved["predict_seconds"])
+    assert len(saved["ipopt_wall_seconds"]) == 2 == len(saved["ipopt_status"])
+    assert saved["machine"]["cpu"] and rec["unit"] == saved["unit"]
+
+
+def test_timing_command_runs_the_cli_under_the_pinned_python():
+    assert tr.timing_command("/env/bin/python", 4, "/w/out", 20, 4) == [
+        "/env/bin/python", "-m", "RPINN.timing_runs", "run", "--unit", "4", "--out", "/w/out",
+        "--ipopt", "20", "--workers", "4"]
